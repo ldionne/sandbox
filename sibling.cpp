@@ -4,8 +4,8 @@
 
 #include <boost/assert.hpp>
 #include <boost/move/move.hpp>
+#include <boost/utility/swap.hpp>
 #include <cstddef>
-#include <utility>
 
 
 namespace sandbox {
@@ -51,21 +51,8 @@ struct sibling {
             other_->other_ = NULL;
     }
 
-    static std::pair<sibling, sibling> get() {
-        sibling a;
-        sibling b(&a);
-        a.other_ = &b;
-        return std::make_pair(boost::move(a), boost::move(b));
-    }
-
     bool has_sibling() const {
         return other_ != NULL;
-    }
-
-    bool is_sibling_of(sibling const& sib) const {
-        BOOST_ASSERT((other_ == &sib) == (sib.other_ == this));
-        BOOST_ASSERT(!has_sibling() ? other_ != &sib : true);
-        return other_ == &sib;
     }
 
     sibling& other() {
@@ -79,19 +66,61 @@ struct sibling {
     }
 
     friend void swap(sibling& x, sibling& y) {
-        using std::swap;
-        swap(y.other_->other_, x.other_->other_);
-        swap(y.other_, x.other_);
+        boost::swap(y.other_->other_, x.other_->other_);
+        boost::swap(y.other_, x.other_);
+    }
+
+    friend bool are_siblings(sibling const& x, sibling const& y) {
+        BOOST_ASSERT((x.other_ == &y) == (y.other_ == &x));
+        BOOST_ASSERT(!x.has_sibling() ? x.other_ != &y : true);
+        BOOST_ASSERT(!y.has_sibling() ? y.other_ != &x : true);
+        return x.other_ == &y;
     }
 
 private:
     BOOST_MOVABLE_BUT_NOT_COPYABLE(sibling)
+
+    template <typename U>
+    friend struct siblings;
 
     // These two constructors are required to initialize two siblings.
     sibling() : other_(NULL) { }
     explicit sibling(sibling* other) : other_(other) { }
 
     sibling* other_;
+};
+
+template <typename T>
+struct siblings {
+    typedef sibling<T> sibling_type;
+    typedef sibling_type first_type;
+    typedef sibling_type second_type;
+
+    first_type first;
+    second_type second;
+
+    siblings()
+        : first(&second), second(&first)
+    { }
+
+    siblings(BOOST_RV_REF(siblings) others)
+        : first(boost::move(others.first)),
+          second(boost::move(others.second))
+    { }
+
+    siblings& operator=(BOOST_RV_REF(siblings) others) {
+        first = boost::move(others.first);
+        second = boost::move(others.second);
+        return *this;
+    }
+
+    friend void swap(siblings& a, siblings& b) {
+        boost::swap(a.first, b.first);
+        boost::swap(a.second, b.second);
+    }
+
+private:
+    BOOST_MOVABLE_BUT_NOT_COPYABLE(siblings)
 };
 } // end namespace sandbox
 
@@ -103,39 +132,40 @@ private:
 
 // g++-4.8 -std=c++11 -Wall -Wextra -pedantic -I /usr/local/include -o sibling sibling.cpp -O0
 
-typedef sandbox::sibling<int> Sibling;
+typedef sandbox::siblings<int> Siblings;
+typedef Siblings::sibling_type Sibling;
 
 
 void simple_construction() {
-    std::pair<Sibling, Sibling> siblings = Sibling::get();
+    Siblings siblings;
     Sibling a = boost::move(siblings.first);
     Sibling b = boost::move(siblings.second);
-    BOOST_ASSERT(a.is_sibling_of(b));
-    BOOST_ASSERT(b.is_sibling_of(a));
+    BOOST_ASSERT(are_siblings(a, b));
+    BOOST_ASSERT(are_siblings(b, a));
 }
 
 void self_assign_is_noop() {
-    std::pair<Sibling, Sibling> siblings = Sibling::get();
+    Siblings siblings;
     Sibling a = boost::move(siblings.first);
     Sibling b = boost::move(siblings.second);
     a = boost::move(a);
-    BOOST_ASSERT(a.is_sibling_of(b));
-    BOOST_ASSERT(b.is_sibling_of(a));
+    BOOST_ASSERT(are_siblings(a, b));
+    BOOST_ASSERT(are_siblings(b, a));
 }
 
 void move_construction_kills_moved_from() {
-    std::pair<Sibling, Sibling> siblings = Sibling::get();
+    Siblings siblings;
     Sibling a = boost::move(siblings.first);
     Sibling b = boost::move(siblings.second);
 
     Sibling c = boost::move(b);
     BOOST_ASSERT(!b.has_sibling());
-    BOOST_ASSERT(a.is_sibling_of(c));
-    BOOST_ASSERT(c.is_sibling_of(a));
+    BOOST_ASSERT(are_siblings(a, c));
+    BOOST_ASSERT(are_siblings(c, a));
 }
 
 void killing_sibling_empties_both() {
-    std::pair<Sibling, Sibling> siblings = Sibling::get();
+    Siblings siblings;
     Sibling a = boost::move(siblings.first);
     Sibling b = boost::move(siblings.second);
 
@@ -145,30 +175,29 @@ void killing_sibling_empties_both() {
 }
 
 void swapping_related_siblings_is_noop() {
-    std::pair<Sibling, Sibling> siblings = Sibling::get();
+    Siblings siblings;
     Sibling a = boost::move(siblings.first);
     Sibling b = boost::move(siblings.second);
 
     swap(a, b);
-    BOOST_ASSERT(a.is_sibling_of(b));
-    BOOST_ASSERT(b.is_sibling_of(a));
+    BOOST_ASSERT(are_siblings(a, b));
+    BOOST_ASSERT(are_siblings(b, a));
 }
 
 void swapping_unrelated_siblings_works_as_expected() {
-    std::pair<Sibling, Sibling> ab = Sibling::get();
+    Siblings ab, cd;
     Sibling a = boost::move(ab.first);
     Sibling b = boost::move(ab.second);
 
-    std::pair<Sibling, Sibling> cd = Sibling::get();
     Sibling c = boost::move(cd.first);
     Sibling d = boost::move(cd.second);
 
     swap(a, c);
-    BOOST_ASSERT(a.is_sibling_of(d));
-    BOOST_ASSERT(d.is_sibling_of(a));
+    BOOST_ASSERT(are_siblings(a, d));
+    BOOST_ASSERT(are_siblings(d, a));
 
-    BOOST_ASSERT(b.is_sibling_of(c));
-    BOOST_ASSERT(c.is_sibling_of(b));
+    BOOST_ASSERT(are_siblings(b, c));
+    BOOST_ASSERT(are_siblings(c, b));
 }
 
 int main() {
