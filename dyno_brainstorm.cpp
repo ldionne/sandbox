@@ -1,60 +1,40 @@
 
+namespace tag {
+    struct acquire;
+    struct release;
+}
 
-// Create an event. It is identified by a tag and that is the only way to
-// interact with the event, because the actual implementation of the event
-// is completely unspecified. The actual type of the event will be generated
-// when the framework is generated, at the end.
-//
-// We specify information to be recorded by the event when it is triggered.
-// There are some predefined actions provided by dyno, such as recording the
-// call stack.
-//
-// It is also possible to define arbitrary custom information to be gathered
-// when the event is triggered. This information can be gathered by several
-// different means:
-//  - It can be provided when the event is generated, by passing it to
-//    the dyno::generate front-end function. It is possible to mark such an
-//    attribute as 'optional'. If it is optional, it does not have to be
-//    provided when the event is generated.
-//
-//  - It can be computed lazily using a function. It will only be computed
-//    when the information is accessed within the event. It is possible to
-//    specify whether the computed attribute should be cached or not, i.e.
-//    whether it should be recomputed everytime it is accessed. Additional
-//    information from the framework may be provided to the function when
-//    it is called.
-//
-//  - It can be computed strictly using a function. It will be computed once
-//    by calling the function when the event is generated. This is equivalent
-//    to providing a non-optional attribute that is the result of calling the
-//    function with the same arguments. However, it can be more convenient to
-//    use this form because additional information from the framework may be
-//    made available to the function.
-//
-// Arbitrary custom actions (functors) can be triggered when the event is
-// generated. This is different from attributes in the sense that the result
-// of the action is discarded, as if it were `void`.
-//
-// All the described actions, whether it be strictly computing an attribute
-// or executing an arbitrary action, are executed in their order of appearance.
-// This does not hold for lazily computed attribtues because we have no way
-// to know when, or if, they will be computed. This also does not hold for
-// provided attributes because they are already computed anyway.
-//
-// It is also possible to specify which groups could be executed in parallel,
-// but the framework is not required to follow that recommendation.
-// However, if a group of actions is specified to be executed serially, this
-// indication is guaranteed to be respected.
+typedef dyno::event<
+            dyno::tagged_as<tag::acquire>,
+            dyno::computation<
+                dyno::tagged_as<tag::thread_id>
+            >
+        > acquire;
+
+dyno::optional<
+    dyno::computation<
+        dyno::tagged_as<tag::optional_tag>,
+        dyno::type<maybe_void>,
+        dyno::computed<how>
+    >
+>
+
+dyno::generate<tag::my_event>(D2_FRAMEWORK,
+    dyno::omit<tag::optional_tag>(),
+    dyno::mapto<tag::other_tag>(args));
+
 typedef dyno::event<
             dyno::tagged_as<tag::acquire>,
 
-            dyno::records<dyno::call_stack>,
-            dyno::records<dyno::serialized_execution_block>,
-            dyno::records<dyno::thread_id>,
-            dyno::records<
+            dyno::computes<dyno::call_stack>,
+            dyno::computes<dyno::serialized_execution_block>,
+            dyno::computes<dyno::thread_id>,
+            dyno::computes<
                 dyno::optional<
-                    dyno::attribute<
-                        tag::info_string, std::string, dyno::provided
+                    dyno::computation<
+                        dyno::tagged_as<tag::info_string>,
+                        dyno::type<std::string>,
+                        dyno::already_computed
                     >
                 >
             >,
@@ -65,10 +45,8 @@ typedef dyno::event<
             >,
 
             dyno::in_parallel<
-                dyno::serial<
+                dyno::in_order<
                     dyno::records<
-                        // we could also say dyno::strictly_computed_attribute, or
-                        // dyno::computed_attribute<..., ..., dyno::strictly>
                         dyno::attribute<
                             tag::system_state_string, std::string, dyno::computed<dyno::strictly>
                         >
@@ -80,7 +58,7 @@ typedef dyno::event<
 
                 dyno::triggers<
                     // within a triggers<> block, stuff is by default executed
-                    // in serie, so we have to explicitly make it parallel.
+                    // in order, so we have to explicitly make it parallel.
                     dyno::in_parallel<
                         print_stuff_to_a_stream,
                         do_something_unrelated
@@ -137,21 +115,20 @@ struct my_backend {
 };
 
 
-
 // When all the events and the backend are defined, we can create a framework.
 typedef dyno::framework<
             dyno::events<acquire, release>,
-            my_backend
+            dyno::backend<my_backend>
         > d2_framework;
-
-
-
 
 
 //////////////////////// deep in a .cpp file //////////////////////////
 namespace d2 {
     void trackable_sync_object::notify_acquire() const {
-        dyno::generate<tag::acquire>(D2_FRAMEWORK, this->id_, other info);
+        dyno::generate<tag::acquire>(
+            D2_FRAMEWORK,
+            dyno::mapto<tag::lock_id>(this->id_),
+            dyno::omit<dyno::call_stack>());
     }
 }
 //////////////////////////////////////////////////////////////
@@ -199,3 +176,19 @@ typedef dyno::tracked_entity<
                 acquire, release
             >
         > tracked_lock;
+
+
+
+
+
+
+/***************************************************************************/
+#define DYNO_VARIADIC_FUNCTION_TEMPLATE_ARG(Arg) BOOST_FWD_REF(Arg)
+#define DYNO_VARIADIC_FUNCTION_TEMPLATE(typename_Args, arglist)             \
+    template <typename Tag, typename Framework typename_Args>               \
+    void generate(arglist) {                                                \
+        ::boost::forward<Args>(args)                                                                    \
+    }                                                                       \
+/**/
+
+#include <dyno/detail/variadic_templates.hpp>
