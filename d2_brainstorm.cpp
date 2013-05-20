@@ -132,104 +132,49 @@ struct lock_stream {
 #endif
 
 
-#include <d2/detail/basic_mutex.hpp>
-#include <d2/sandbox/dispatch_policy.hpp>
-#include <d2/sandbox/dispatch_rules.hpp>
-#include <d2/sandbox/event.hpp>
-#include <d2/sandbox/event_traits.hpp>
-#include <boost/fusion/mpl.hpp>
-#include <boost/fusion/adapted.hpp>
-#include <boost/fusion/algorithm.hpp>
-#include <boost/fusion/functional.hpp>
-#include <boost/fusion/iterator.hpp>
-#include <boost/fusion/support.hpp>
-#include <boost/fusion/tuple.hpp>
-#include <boost/fusion/view.hpp>
+
+namespace tag {
+    struct acquire { };
+    struct lock_id { };
+    struct thread_id { };
+}
 
 
-struct null_factory {
-    struct result_type {
-        template <typename T>
-        friend void operator<<(result_type const&, T const&) {
-            std::cout << "yup";
-        }
-    };
-
-    template <typename Event, typename State, typename Data>
-    result_type operator()(Event const&, State const&, Data const&) const {
-        return result_type();
-    }
-
+struct synchronization_graph_builder {
     template <typename Event>
-    result_type operator()(Event const&) const {
-        return result_type();
+    void operator()(tag::acquire, Event const& event) const {
+        typedef typename dyno::result_of::getattr<
+                    tag::lock_id, Event const&
+                >::type LockId;
+
+        LockId lid = dyno::getattr<tag::lock_id>(event);
+        bool b = dyno::hasattr<tag::lock_id>(event);
     }
 };
 
-namespace tag {
-    struct thread { };
-    struct lock { };
-    struct parent_segment { };
-    struct new_parent_segment { };
-    struct child_segment { };
-}
 
-struct acquire_event
-    : d2::event<
-        d2::scope<d2::thread_scope>,
-        d2::members<
-            tag::thread, unsigned long,
-            tag::lock, unsigned long
-        >
-    >
-{ };
+typedef dyno::computation<
+            dyno::tagged_as<tag::lock_id>,
+            unsigned,
+            dyno::evaluated<dyno::eagerly>
+        > lock_id;
 
-struct release_event : acquire_event { };
 
-struct start_event
-    : d2::event<
-        d2::scope<d2::process_scope>,
-        d2::members<
-            tag::parent_segment, unsigned long,
-            tag::new_parent_segment, unsigned long,
-            tag::child_segment, unsigned long
-        >
-    >
-{ };
+typedef dyno::framework<
+            dyno::events<
+                dyno::event<
+                    dyno::tagged_as<tag::acquire>,
+                    dyno::records<lock_id>,
+                    dyno::records<thread_id>
+                >
+            >
+        > d2_framework;
 
-struct join_event : start_event { };
 
-// Generate dispatch rules.
-struct my_dispatch_rules
-    : d2::dispatch_rules<
-        d2::when<
-            d2::if_<d2::has_thread_scope<d2::_event>()>,
 
-            d2::dispatch_policy<
-                d2::stream_factory<null_factory>
-            >(d2::_event)
-        >,
-        d2::when<
-            d2::if_<d2::has_process_scope<d2::_event>()>,
+some_framework.generate<tag::some_event>(info...);
 
-            d2::dispatch_policy<
-                d2::stream_factory<null_factory>
-            >(d2::_event)
-        >
-    >
-{ };
 
-struct my_load_rules
-    : d2::event_processor< // isnt it the same thing as dispatch_rules?
-        d2::when<
-            d2::matches<d2::_event, start_event>,
-            process_start_event(d2::_event, d2::_data)
-        >,
-        d2::otherwise<
-            d2::call<some_visitor>
-        >
-    >
-{ };
 
 
 // Avoir des "attributs" qui vont chercher de l'information spécifique. Par
@@ -245,30 +190,6 @@ struct my_load_rules
 // un foncteur lorsqu'il a terminé de dispatcher.
 
 
-namespace tag {
-    struct acquire;
-    struct release;
-
-    struct segment {
-        typedef unsigned type;
-    };
-    struct other_info;
-}
-
-namespace events {
-    typedef dyno::event<
-                // tag identifying the event type
-                tag::acquire,
-
-                // segment::type is used automatically as the type of the attribute
-                dyno::attribute<tag::segment, unsigned, dyno::provided>,
-
-                // the other_info type is associated to an attribute of type
-                // std::string for this event
-                dyno::attribute<tag::other_info, std::string, dyno::provided>
-
-            > acquire;
-}
 
 // functor with a static_visitor-like interface
 struct lock_graph_builder {
