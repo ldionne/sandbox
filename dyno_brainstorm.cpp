@@ -274,3 +274,26 @@ typedef dyno::tracked_entity<
 /**/
 
 #include <dyno/detail/variadic_templates.hpp>
+
+
+
+
+
+
+//////////////////////////////////////////////////////////////////////////////
+
+
+struct event {
+    context& ctx;
+
+    ... getattr<tag>() {
+        auto attribute = fusion_map.at_key<tag>(*this);
+        return attribute(ctx);
+    }
+};
+
+
+framework {
+
+}
+

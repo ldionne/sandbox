@@ -266,3 +266,13 @@ operator=>(BOOST_FWD_REF(Key) key, BOOST_FWD_REF(Value) value) {
     return boost::forward_as_tuple(boost::forward<Key>(key),
                                    boost::forward<Value>(value));
 }
+
+
+
+
+
+//////////////////////////////////////////////////////////////////////////////
+
+typedef dyno::framework<
+    fsn::map<>
+> d2_framework_t;
