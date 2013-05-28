@@ -118,13 +118,153 @@ dyno::enable_dynamic_binding_for<tag::my_event, framework> framework_with_dynami
 //
 // Contrarily to the above events, these entities must have some kind of
 typedef dyno::tracked_entity<
-            dyno::on_creation<
-                dyno::record<dyno::call_stack>
-            >,
-            dyno::on_destruction<
-                dyno::do_nothing
-            >,
-            dyno::generates<
-                acquire, release
-            >
-        > tracked_lock;
+    dyno::on_creation<
+        dyno::record<dyno::call_stack>
+    >,
+    dyno::on_destruction<
+        dyno::do_nothing
+    >,
+    dyno::generates<
+        acquire, release
+    >
+> tracked_lock;
+
+//////////////////////////////////////////////////////////////////////////////
+
+
+namespace dyno { namespace events {
+    struct lock_acquire;
+    struct lock_release;
+}}
+
+
+struct mutex {
+    void lock() {
+        // ...
+        dyno::generate<dyno::events::acquire>();
+    }
+};
+
+namespace dyno {
+    // can we automatically populate this vector with some ugly hacks?
+    // for example by using something similar to my concept based overloading
+    // technique?
+    typedef boost::mpl::vector<...> FRAMEWORKS;
+
+    template <typename Tag>
+    void generate() {
+        boost::mpl::for_each<FRAMEWORKS>(generate<Tag>);
+    }
+}
+
+namespace d2 {
+    // dyno defines all generic stuff that has to do with locks (and other objects).
+    // we define the caracteristics (a.k.a. how to classify) the objects.
+    // we basically define what could be described as concepts in a way that
+    // we can pattern match.
+    namespace events {
+        template <typename Recursive, typename Upgradable, typename ReadWrite>
+        struct lock;
+    }
+
+    // dyno defines generic wrappers applicable to all locks (and other objects)
+    namespace wrappers {
+        template <typename Wrapped, typename Recursive, typename Upgradable, typename ReadWrite>
+        struct lockable : Wrapped {
+            using Wrapped::Wrapped;
+
+            void lock() {
+                Wrapped::lock();
+                dyno::generate<events::lock<Recursive, Upgradable, ReadWrite> >();
+            }
+
+            bool try_lock() {
+                if (Wrapped::try_lock()) {
+                    dyno::generate<events::try_lock_success<Recursive, Upgradable, ReadWrite> >();
+                    return true;
+                }
+                dyno::generate<events::try_lock_failure<Recursive, Upgradable, ReadWrite> >();
+                return false;
+            }
+
+            void unlock() {
+                Wrapped::unlock();
+                dyno::generate<events::release<Recursive, Upgradable, ReadWrite> >();
+            }
+        };
+    }
+
+    // and then frameworks use these events to do stuff. it must also be trivial
+    // to extend the set of existing events: dyno itself must use that extension
+    // mechanism to define the core events it provides.
+
+
+    // frameworks could also be proto grammars for matching events.
+    // we then associate kind-of-transforms to be performed when
+    // this or that event is generated. dyno provides some special
+    // environment variables corresponding to the attributes of the
+    // events of the current implementation.
+    struct d2_framework
+        : dyno::when</* grammar for matching events */,
+            some_action(dyno::_this, dyno::_thread_id, dyno::_env) // list of attributes to pass to that action
+        >
+    { };
+
+    /* ce n'est peut-être pas intéressant de spécifier les transforms
+       comme avec proto, mais l'idée du pattern matching est vraiment
+       intéressante. à la place d'avoir une forme en when<...> comme
+       en haut, on pourrait grouper les grammaires à matcher dans un
+       listens_to<...> et puis grouper les actions à faire lors d'un
+       match dans une autre structure.
+    */
+
+    typedef dyno::framework<
+        // use pattern matching (a complete proto grammar?) for determining
+        // the events to listen to? we could listen to events with some
+        // caracteristics while ignoring events with some other caracteristics,
+        // and perform different actions based on those caracteristics.
+        //
+        // note: events could have a lot of caracteristics describing
+        //       them. for example, necessary caracteristics for lock
+        //       acquires would be whether it is an upgrade, a read/write
+        //       lock and so on.
+        dyno::listens_to<
+            dyno::events::lock_acquire<dyno::recursive>,
+            dyno::events::lock_release<dyno::_>,
+            dyno::events::lock_acquire<std::mutex> // we could go down to per-type granularity
+        >,
+        dyno::listener<d2_listener>
+    > d2_framework;
+
+    // statically registers the framework to the dyno::FRAMEWORKS vector.
+#ifdef D2_ENABLED
+    DYNO_REGISTER_FRAMEWORK(d2_framework)
+#endif
+
+    // another way of doing it would be to only specify what's really needed:
+    // a visitor-like interface. using expression SFINAE, we could then detect
+    // whether a framework has a method for handling an event (using pattern
+    // matching). that would probably be the most concise way of doing things.
+    struct d2_framework {
+        // define a property that every lock has (maybe?)
+        struct properties_of<any_lock> {
+            properties_of() { lock_id = get_new_unique_lock_id(); }
+            unsigned lock_id;
+        };
+
+        d2_framework() {
+            // called during static initialization
+        }
+
+        template <typename Event>
+        void operator()(dyno::events::lock_acquire<dyno::recursive>, Event const& event) const {
+            getattr<thread_id>(event);
+            getattr<lock_id>(event);
+        }
+
+        template <typename Event>
+        void operator()(dyno::events::lock_release<dyno::_>, Event const& event) const {
+
+        }
+    };
+}
