@@ -153,30 +153,6 @@ struct synchronization_graph_builder {
 };
 
 
-typedef dyno::computation<
-            dyno::tagged_as<tag::lock_id>,
-            unsigned,
-            dyno::evaluated<dyno::eagerly>
-        > lock_id;
-
-
-typedef dyno::framework<
-            dyno::events<
-                dyno::event<
-                    dyno::tagged_as<tag::acquire>,
-                    dyno::records<lock_id>,
-                    dyno::records<thread_id>
-                >
-            >
-        > d2_framework;
-
-
-
-some_framework.generate<tag::some_event>(info...);
-
-
-
-
 // Avoir des "attributs" qui vont chercher de l'information spécifique. Par
 // exemple, un event peut avoir l'attribut "thread", auquel cas il va
 // automatiquement connaître la thread dans laquelle il est généré (ça peut
@@ -253,26 +229,3 @@ int main() {
 }
 
 // clang++ -std=c++98 -Wall -Wextra -pedantic -I ~/Documents/Ordi/boost-trunk -I ~/Documents/Ordi/d2/include ~/Desktop/brainstorm_d2.cpp -o ~/Desktop/brainstorm
-
-
-template <typename Key, typename Value>
-typename boost::enable_if<
-    boost::mpl::or_<
-        has_key_value_enabled<typename boost::remove_reference<Key>::type>,
-        has_key_value_enabled<typename boost::remove_reference<Value>::type>
-    >,
-boost::tuple<BOOST_FWD_REF(Key), BOOST_FWD_REF(Value)> >::type
-operator=>(BOOST_FWD_REF(Key) key, BOOST_FWD_REF(Value) value) {
-    return boost::forward_as_tuple(boost::forward<Key>(key),
-                                   boost::forward<Value>(value));
-}
-
-
-
-
-
-//////////////////////////////////////////////////////////////////////////////
-
-typedef dyno::framework<
-    fsn::map<>
-> d2_framework_t;
