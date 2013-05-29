@@ -159,7 +159,7 @@ namespace dyno {
 
 namespace d2 {
     // dyno defines all generic stuff that has to do with locks (and other objects).
-    // we define the caracteristics (a.k.a. how to classify) the objects.
+    // we define the characteristics (a.k.a. how to classify) the objects.
     // we basically define what could be described as concepts in a way that
     // we can pattern match.
     namespace events {
@@ -175,22 +175,25 @@ namespace d2 {
 
             void lock() {
                 Wrapped::lock();
-                dyno::generate<events::lock<Recursive, Upgradable, ReadWrite> >();
+                dyno::generate<events::lock<Recursive, Upgradable, ReadWrite> >(state_);
             }
 
             bool try_lock() {
                 if (Wrapped::try_lock()) {
-                    dyno::generate<events::try_lock_success<Recursive, Upgradable, ReadWrite> >();
+                    dyno::generate<events::try_lock_success<Recursive, Upgradable, ReadWrite> >(state_);
                     return true;
                 }
-                dyno::generate<events::try_lock_failure<Recursive, Upgradable, ReadWrite> >();
+                dyno::generate<events::try_lock_failure<Recursive, Upgradable, ReadWrite> >(state_);
                 return false;
             }
 
             void unlock() {
                 Wrapped::unlock();
-                dyno::generate<events::release<Recursive, Upgradable, ReadWrite> >();
+                dyno::generate<events::release<Recursive, Upgradable, ReadWrite> >(state_);
             }
+
+        private:
+            d2_framework::state_for<lockable<Recursive, Upgradable, ReadWrite> > state_;
         };
     }
 
@@ -221,11 +224,11 @@ namespace d2 {
     typedef dyno::framework<
         // use pattern matching (a complete proto grammar?) for determining
         // the events to listen to? we could listen to events with some
-        // caracteristics while ignoring events with some other caracteristics,
-        // and perform different actions based on those caracteristics.
+        // characteristics while ignoring events with some other characteristics,
+        // and perform different actions based on those characteristics.
         //
-        // note: events could have a lot of caracteristics describing
-        //       them. for example, necessary caracteristics for lock
+        // note: events could have a lot of characteristics describing
+        //       them. for example, necessary characteristics for lock
         //       acquires would be whether it is an upgrade, a read/write
         //       lock and so on.
         dyno::listens_to<

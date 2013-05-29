@@ -1,231 +1,162 @@
+template <typename ...Characteristics> struct mutex;
+// characteristics of mutexes:
+template <typename> struct ownership; // how many threads can own the mutex at a time?
+struct none;
+struct shared;
+struct exclusive;
+struct upgradable; // this is functionally the same as shared, but only one thread may have it at a time and it is not possible for a thread to have it if a thread has exclusive ownership (and vice-versa)
 
-#if 0
-namespace custom {
+template <typename> struct recursiveness; // can the mutex be re-acquired by the same thread?
+struct non_recursive;
+struct recursive;
 
-// Generate analysis rules.
-typedef analysis_rules<
-            when<acquire_event,
-                add_edge_in_lock_graph
-            >,
-            when<start_event,
-                add_edge_in_segmentation_graph
-            >
-        > my_analysis_rules;
 
-typedef set<acquire_event, release_event, start_event, join_event> my_events;
+template <typename ...Characteristics> struct mutex_operation;
+// characteristics of all operations on mutexes:
+template <typename> struct synchronization_object;
+template <typename> struct previous_ownership;
+template <typename> struct new_ownership;
 
-// Generate a dynamic analysis framework for grouping a set of events to
-// our dispatch rules. We need the set of events to be specified if we
-// want to use variant to serialize the events. I think this is a good
-// compromise between ease of extension and ease of implementation.
-typedef framework<
-            my_events, my_dispatch_rules, my_analysis_rules
-        > my_framework;
-}
 
-static custom::my_framework d2;
+// We can now define some common operations
+namespace operations {
+    // BasicLockable
+    typedef mutex_operation<
+        previous_ownership<none>, new_ownership<exclusive>, synchronization_object<_1>
+    > lock;
 
-int main() {
-    enable(d2, "foobar");
-        acquire_event acquire;
-        dispatch(d2, acquire);
-    disable(d2);
+    typedef mutex_operation<
+        previous_ownership<exclusive>, new_ownership<none>, synchronization_object<_1>
+    > unlock;
 
-    // these are ignored because the framework is disabled
-    acquire_event acquire2;
-    dispatch(d2, acquire2);
+    // SharedLockable
+    typedef mutex_operation<
+        previous_ownership<none>, new_ownership<shared>, synchronization_object<_1>
+    > lock_shared;
 
-    // compile-time error because foobar_event is not in the framework's domain
-    typedef event<...> foobar_event;
-    foobar_event foo;
-    dispatch(d2, foo);
+    typedef mutex_operation<
+        previous_ownership<shared>, new_ownership<none>, synchronization_object<_1>
+    > unlock_shared;
 
-    // re-enable the framework with the last settings
-    enable(d2);
-}
+    // UpgradeLockable
+    typedef mutex_operation<
+        previous_ownership<none>, new_ownership<upgradable>, synchronization_object<_1>
+    > lock_upgrade;
 
-struct map_by_thread_id {
-    template <typename Sig>
-    struct result;
+    typedef mutex_operation<
+        previous_ownership<upgradable>, new_ownership<none>, synchronization_object<_1>
+    > unlock_upgrade;
 
-    template <typename This, typename Event, typename State, typename Data>
-    struct result<This(Event&, State&, Data&)> {
-        typedef typename boost::remove_reference<
-                    typename boost::proto::result_of::env_var<
-                        Data, boost::proto::data_type
-                    >::type
-                >::type Bundle;
-        typedef typename Bundle::map_type::mapped_type& type;
-    };
+    typedef mutex_operation<
+        previous_ownership<shared>, new_ownership<exclusive>, synchronization_object<_1>
+    > unlock_shared_and_lock;
 
-    template <typename Event, typename State, typename Data>
-    typename result<map_by_thread_id(Event const&, State const&, Data&)>::type
-    operator()(Event const& event, State const&, Data& data) const {
-        typedef typename result<
-                    map_by_thread_id(Event const&, State const&, Data&)
-                >::Bundle Bundle;
-        typedef typename Bundle::mutex_type Mutex;
+    typedef mutex_operation<
+        previous_ownership<exclusive>, new_ownership<shared>, synchronization_object<_1>
+    > unlock_and_lock_shared;
 
-        d2::detail::scoped_lock<Mutex> lock(data[boost::proto::data].mutex);
-        return data[boost::proto::data].map[thread_of(event)];
-    }
-};
+    typedef mutex_operation<
+        previous_ownership<shared>, new_ownership<upgradable>, synchronization_object<_1>
+    > unlock_shared_and_lock_upgrade;
 
-template <typename ExtractMapFromData = boost::multi_index::identity,
-          typename ExtractEventKey = boost::multi_index::identity>
-struct map_factory {
-    template <typename Sig>
-    struct result;
+    typedef mutex_operation<
+        previous_ownership<exclusive>, new_ownership<upgradable>, synchronization_object<_1>
+    > unlock_and_lock_upgrade;
 
-    template <typename This, typename Event, typename State, typename Data>
-    struct result<This(Event&, State&, Data&)> {
-        typedef typename boost::remove_reference<
-                    typename boost::result_of<ExtractMapFromData(Data&)>::type
-                >::type Map;
-        typedef typename Map::mapped_type& type;
-    };
+    typedef mutex_operation<
+        previous_ownership<upgradable>, new_ownership<exclusive>, synchronization_object<_1>
+    > unlock_upgrade_and_lock;
 
-    template <typename Event, typename State, typename Data>
-    typename result<map_factory(Event const&, State const&, Data const&)>::type
-    operator()(Event const& event, State const&, Data const& data) const {
-        return ExtractMapFromData()(data)[ExtractEventKey()(event)];
-    }
+    typedef mutex_operation<
+        previous_ownership<upgradable>, new_ownership<shared>, synchronization_object<_1>
+    > unlock_upgrade_and_lock_shared;
+} // end namespace operations
 
-    template <typename Event, typename State, typename Data>
-    typename result<map_factory(Event const&, State const&, Data&)>::type
-    operator()(Event const& event, State const&, Data& data) const {
-        return ExtractMapFromData()(data)[ExtractEventKey()(event)];
-    }
-};
 
-struct Bundle {
-    typedef d2::detail::basic_mutex mutex_type;
-    mutex_type mutex;
+// Now let's define what to do when these operations happen
+struct build_lock_graph {
+    boost::directed_graph<...> lock_graph;
 
-    struct lockable_ofstream {
-        std::ofstream stream;
-        mutex_type mutex;
-
-        template <typename T>
-        friend lockable_ofstream& operator<<(lockable_ofstream& self, T const& t) {
-            d2::detail::scoped_lock<mutex_type> lock(self.mutex);
-            self.stream << t;
-            return self;
+    void operator()(mutex_operation<previous_ownership<none>, new_ownership<exclusive>, synchronization_object<_> >,
+                    environment<tags::thread_id, tags::gatelocks, tags::mutex_id, tags::code_segment_id> env) {
+        auto mutex = env[tags::mutex_id];
+        add_vertex(mutex, lock_graph);
+        for (auto gatelock: env[tags::gatelocks]) {
+            // TODO: If the code location of this acquire and that of the
+            //       other acquire making `mutex` and `gatelock` adjacent
+            //       are different, then we would like to record this acquire
+            //       because it is not redundant to do so.
+            if (!is_adjacent(mutex, gatelock, lock_graph))
+                // we might want to tag the edge with the whole environment
+                add_edge(gatelock, mutex, lock_graph);
         }
-    };
-
-    typedef boost::unordered_map<d2::ThreadId, lockable_ofstream> map_type;
-    map_type map;
-};
-
-struct lock_stream {
-    d2::detail::basic_mutex& mutex_;
-
-    template <typename Event, typename State, typename Data>
-    lock_stream(Event const&, State const&, Data& env)
-                                            : mutex_(env[d2::stream_].mutex) {
-        mutex_.lock();
     }
 
-    ~lock_stream() { mutex_.unlock(); }
+    void operator()(mutex_operation<previous_ownership<exclusive>, new_ownership<none>, synchronization_object<_> >,
+                    environment<tags::thread_id, tags::gatelocks, tags::mutex_id, tags::code_segment_id> env) {
+        // nothing to do
+    }
+
+    void operator()(mutex_operation<previous_ownership<none>, new_ownership<exclusive>, synchronization_object<mutex<recursiveness<recursive> > > >,
+                    environment<tags::thread_id, tags::gatelocks, tags::mutex_id, tags::code_segment_id, tags::recursive_lock_count> env) {
+        if (env[tags::recursive_lock_count]++)
+            operator()(mutex_operation<previous_ownership<none>, new_ownership<exclusive>, synchronization_object<_> >(), env);
+    }
+
+    void operator()(mutex_operation<previous_ownership<exclusive>, new_ownership<none>, synchronization_object<mutex<recursiveness<recursive> > > >,
+                    environment<tags::thread_id, tags::gatelocks, tags::mutex_id, tags::code_segment_id, tags::recursive_lock_count> env) {
+        if (--env[tags::recursive_lock_count] == 0)
+            operator()(mutex_operation<previous_ownership<exclusive>, new_ownership<none>, synchronization_object<_> >(), env);
+    }
 };
-#endif
 
 
 
-namespace tag {
-    struct acquire { };
-    struct lock_id { };
-    struct thread_id { };
+
+template <typename ...Characteristics> struct code_segment;
+// Characteristics of code segments
+template <typename> struct parallelism_level;
+struct task;
+struct thread;
+struct process; // don't think about this right now
+
+namespace operations {
+    template <typename Level> struct start;   // semantics: current segment must complete before the two new segments can begin (fork semantics)
+    template <typename Level> struct join;    // semantics: current segment waits for the two other segments to complete
+    template <typename Level> struct detach;  // semantics: segment still running but no one will wait for it to complete before the end of the execution
 }
 
+struct build_segmentation_graph {
+    boost::directed_graph<...> segmentation_graph;
 
-struct synchronization_graph_builder {
-    template <typename Event>
-    void operator()(tag::acquire, Event const& event) const {
-        typedef typename dyno::result_of::getattr<
-                    tag::lock_id, Event const&
-                >::type LockId;
+    void operator()(start<parallelism_level<thread> >,
+                    environment<tags::parent_segment, tags::child_segment, tags::new_parent_segment> env) {
+        add_vertex(env[tags::new_parent_segment], segmentation_graph);
+        add_vertex(env[tags::child_segment], segmentation_graph);
+        add_edge(env[tags::parent_segment], env[tags::new_parent_segment], segmentation_graph);
+        add_edge(env[tags::parent_segment], env[tags::child_segment], segmentation_graph);
+        env[tags::parent_segment] = env[tags::new_parent_segment];
+    }
 
-        LockId lid = dyno::getattr<tag::lock_id>(event);
-        bool b = dyno::hasattr<tag::lock_id>(event);
+    void operator()(join<parallelism_level<thread> >,
+                    environment<tags::parent_segment, tags::child_segment, tags::new_parent_segment> env) {
+        add_vertex(env[tags::new_parent_segment], segmentation_graph);
+        add_edge(env[tags::parent_segment], env[tags::new_parent_segment], segmentation_graph);
+        add_edge(env[tags::child_segment], env[tags::new_parent_segment], segmentation_graph);
     }
 };
 
 
-// Avoir des "attributs" qui vont chercher de l'information spécifique. Par
-// exemple, un event peut avoir l'attribut "thread", auquel cas il va
-// automatiquement connaître la thread dans laquelle il est généré (ça peut
-// s'implémenter de plusieurs manières).
-
-// Ça prend un module qui permet de spécifier des dispatch rules génériques
-// qui n'ont pas rapport avec le loading ou le saving d'events. Ça, ça se
-// trouve à être un petit wrapper par dessus proto qui permet d'utiliser
-// du vocabulaire d'analyse dynamique plutôt que de traversal d'expression
-// template. En essence, c'est la même chose. Le dispatcher call simplement
-// un foncteur lorsqu'il a terminé de dispatcher.
-
-
-
-// functor with a static_visitor-like interface
-struct lock_graph_builder {
-    // The real Event type is not known, so it is easy to change the
-    // implementation. The event is only manipulated through its attribute tags.
-    // Internal note: It is not excluded that the `Event` type actually
-    // holds a reference to the framework that generated it, so that it
-    // can ask for information there. That's clever.
-    template <typename Event>
-    void operator()(tag::acquire, Event const& event) const {
-        dyno::getattr<tag::segment>(event);
-        dyno::hasattr<tag::segment>(event);
-    }
+auto single_threaded_cycle = [](auto cycle) {
+    return any_of(cross_product(cycle), _1 != _2 && _1.thread == _2.thread);
 };
 
-
-namespace d2 {
-    // type of the backend that will be used for d2.
-    // D2SpecificMapping is a functor that will dispatch event tags on
-    // the filesystem. it will have access to the event's information.
-    typedef dyno::filesystem<D2SpecificMapping> filesystem;
-
-    typedef dyno::dynamic_analysis_framework<
-                // list of events created with dyno::event<>
-                dyno::events<events::acquire>,
-
-                // complicated part:
-                // the backend must be specified. are there generic ways of
-                // thinking about a backend, or will it always have to be
-                // implementation specific? For now, let's say we have
-                // something very implementation specific, to simplify the
-                // things.
-                dyno::backend<filesystem>
-
-            > framework;
-}
-
-int main() {
-    d2::framework d2_framework;
-    dyno::generate<tag::acquire>(d2_framework,
-        dyno::init_attribute<tag::segment>(0),
-
-            /* information used to construct the event, if required */);
-
-
-    unsigned long t = get(tag::thread(), acquire);
-
-    int state, data;
-    dispatch(acquire, state, data);
-    dispatch(start, state, data);
-
-    my_load_rules load;
-    load(some_repository);
-
-    dyno::program<dyno::basic_filesystem_db> prog("path to repository");
-    prog.threads();
-    prog.threads()[0].segments();
-    for (auto event : prog.threads()[0].events()) {
-        load(event); // constructs the graph
+struct goodlock_analysis : union_of<build_lock_graph, build_segmentation_graph> {
+    auto operator()(end_of_program) {
+        return boost::graph::all_cycles(lock_graph)
+                | boost::adaptors::filtered(single_threaded_cycle)
+                | boost::adaptors::filtered(explicitly_ordered_segments)
+                | boost::adaptors::filtered(overlapping_gatelocks)
+                ;
     }
-}
-
-// clang++ -std=c++98 -Wall -Wextra -pedantic -I ~/Documents/Ordi/boost-trunk -I ~/Documents/Ordi/d2/include ~/Desktop/brainstorm_d2.cpp -o ~/Desktop/brainstorm
+};
