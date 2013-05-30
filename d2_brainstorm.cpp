@@ -1,5 +1,5 @@
 
-#include "traversal.hpp"
+#include "dyno_concepts.hpp"
 #include <boost/fusion/include/as_map.hpp>
 #include <boost/fusion/include/map.hpp>
 #include <boost/fusion/include/mpl.hpp>
@@ -20,8 +20,6 @@
 #include <tuple>
 #include <utility>
 
-
-struct my_mutex;
 
 #define RETURNS(...) -> decltype(__VA_ARGS__) { return __VA_ARGS__; }
 
@@ -53,135 +51,11 @@ struct call_member_fn<R T::*, mfp> {
 };
 
 
-namespace d2 { struct goodlock_analysis; }
-
-
-namespace dyno {
-    typedef boost::mpl::vector<d2::goodlock_analysis> FRAMEWORKS;
-
-    using boost::traverse::matches;
-    using boost::traverse::_;
-
-    template <typename Pattern>
-    struct convertible_to_matches {
-        template <typename T, typename = typename boost::enable_if<matches<Pattern, T> >::type>
-        operator T() const { return T(); }
-    };
-
-    template <typename Event, typename Environment>
-    struct call_it {
-        Environment& env;
-
-        template <typename Framework>
-        void operator()(Framework const& framework) const {
-            framework(convertible_to_matches<Event>(), env);
-        }
-    };
-
-    template <typename Event, typename Environment>
-    void generate(Environment const& env) {
-        boost::mpl::for_each<FRAMEWORKS>(call_it<Event, Environment const>{env});
-    }
-
-    template <typename Event>
-    void generate() {
-        generate<Event>(boost::fusion::map<>());
-    }
-
-
-    //////////////////////////////////////////////////////////////////////////
-    // keys.hpp (find another name)
-    //////////////////////////////////////////////////////////////////////////
-    struct _self; // the object (*this) that generated the event
-    struct _args; // the arguments to the function that triggered the event (should map to a tuple or a fusion::map)
-
-
-    //////////////////////////////////////////////////////////////////////////
-    // program_states.hpp (i want these to be predefined points in the execution of a program where you can do stuff)
-    //////////////////////////////////////////////////////////////////////////
-    struct start_of_program { };
-    struct end_of_program { };
-
-
-    //////////////////////////////////////////////////////////////////////////
-    // mixin_and_wrapper.hpp
-    //////////////////////////////////////////////////////////////////////////
-    template <typename Framework, typename Derived>
-    struct state_for {
-        struct type { };
-    };
-
-    struct base_tracker {
-        template <typename Derived, typename Next>
-        struct apply : Next {
-            INHERIT_CONSTRUCTORS(apply, Next)
-
-        protected:
-            Derived& derived()
-            { return static_cast<Derived&>(*this); }
-
-            Derived const& derived() const
-            { return static_cast<Derived const&>(*this); }
-
-        private:
-            typedef typename boost::fusion::result_of::as_vector<
-                typename boost::fusion::result_of::transform<
-                    FRAMEWORKS, state_for<boost::mpl::_1, Derived>
-                >::type
-            >::type States;
-            States states;
-            // typedef typename boost::fusion::result_of::as_map<
-            //     boost::fusion::zip_view<boost::fusion::vector<FRAMEWORKS, States> >
-            // >::type Framework_to_State;
-            // Framework_to_State framework_to_state;
-        };
-    };
-
-    template <typename Derived>
-    struct form_tracker {
-        template <typename Next, typename Tracker>
-        struct apply {
-            typedef typename Tracker::template apply<Derived, Next> type;
-        };
-    };
-
-    template <typename Derived, typename Basemost, typename ...Trackers>
-    struct inherit_trackers
-        : boost::mpl::inherit_linearly<
-            typename boost::mpl::reverse<
-                boost::mpl::vector<Trackers..., base_tracker>
-            >::type,
-            form_tracker<Derived>,
-            Basemost
-        >
-    { };
-
-    template <typename Derived, typename ...Trackers>
-    struct mixin
-        : inherit_trackers<
-            Derived, boost::mpl::empty_base, Trackers...
-        >::type
-    { };
-
-    template <typename Wrapped, typename ...Trackers>
-    struct wrapper
-        : inherit_trackers<
-            wrapper<Wrapped, Trackers...>, Wrapped, Trackers...
-        >::type
-    {
-    private:
-        typedef typename inherit_trackers<
-                    wrapper<Wrapped, Trackers...>, Wrapped, Trackers...
-                >::type Base;
-
-    public:
-        INHERIT_CONSTRUCTORS(wrapper, Base)
-    };
-} // end namespace dyno
-
-
-
 namespace d2 {
+    struct goodlock_analysis;
+    extern goodlock_analysis D2_FRAMEWORK;
+
+
     //////////////////////////////////////////////////////////////////////////
     // access.hpp
     //////////////////////////////////////////////////////////////////////////
@@ -238,32 +112,36 @@ namespace d2 {
             INHERIT_CONSTRUCTORS(apply, Next)
 
             void lock() {
-                LockImplementation()(this->derived());
+                LockImplementation()(this->facade());
                 dyno::generate<
                     mutex_operation<
                         previous_ownership<none>,
                         new_ownership<exclusive>,
                         synchronization_object<Derived>
                     >
-                >(dyno::key<dyno::_self>() = boost::cref(this->derived()));
+                >(D2_FRAMEWORK, (
+                    dyno::key<dyno::env::_this>() = &this->facade()
+                ));
             }
 
             void unlock() {
-                UnlockImplementation()(this->derived());
+                UnlockImplementation()(this->facade());
                 dyno::generate<
                     mutex_operation<
                         previous_ownership<exclusive>,
                         new_ownership<none>,
                         synchronization_object<Derived>
                     >
-                >(dyno::key<dyno::_self>() = boost::cref(this->derived()));
+                >(D2_FRAMEWORK, (
+                    dyno::key<dyno::env::_this>() = &this->facade()
+                ));
             }
         };
     };
 
     template <typename Derived, typename ...Trackers>
     using basic_lockable_mixin =
-        dyno::mixin<
+        dyno::spy_as_mixin<
             Derived,
             track_lock_unlock<access::use_lock_impl, access::use_unlock_impl>,
             Trackers...
@@ -271,7 +149,7 @@ namespace d2 {
 
     template <typename BasicLockable, typename ...Trackers>
     using basic_lockable_wrapper =
-        dyno::wrapper<
+        dyno::spy_as_wrapper<
             BasicLockable,
             track_lock_unlock<
                 call_member_fn<decltype(&BasicLockable::lock), &BasicLockable::lock>,
@@ -291,7 +169,7 @@ namespace d2 {
             INHERIT_CONSTRUCTORS(apply, Next)
 
             bool try_lock() noexcept {
-                return TryLockImplementation()(this->derived());
+                return TryLockImplementation()(this->facade());
             }
         };
     };
@@ -339,7 +217,7 @@ namespace d2 {
             explicit apply(F&& f, Args&& ...args)
                 // Here, we would wrap the thread function
                 : Next([&] {
-                    return dyno::generate<start<parallelism_level<thread> > >(),
+                    return dyno::generate<start<parallelism_level<thread> > >(D2_FRAMEWORK),
                            void(), // bypass any `operator,` overload
                            std::forward<F>(f)(std::forward<Args>(args)...);
                 })
@@ -348,24 +226,28 @@ namespace d2 {
             using Next::operator=;
 
             void join() {
-                JoinImplementation()(this->derived());
+                JoinImplementation()(this->facade());
                 dyno::generate<
                     d2::join<parallelism_level<thread> >
-                >(dyno::key<dyno::_self>() = boost::cref(this->derived()));
+                >(D2_FRAMEWORK, (
+                    dyno::key<dyno::env::_this>() = &this->facade()
+                ));
             }
 
             void detach() {
-                DetachImplementation()(this->derived());
+                DetachImplementation()(this->facade());
                 dyno::generate<
                     d2::detach<parallelism_level<thread> >
-                >(dyno::key<dyno::_self>() = boost::cref(this->derived()));
+                >(D2_FRAMEWORK, (
+                    dyno::key<dyno::env::_this>() = &this->facade()
+                ));
             }
         };
     };
 
     template <typename Derived, typename ...Trackers>
     using std_thread_mixin =
-        dyno::mixin<
+        dyno::spy_as_mixin<
             Derived,
             track_start_join_detach<access::use_join_impl, access::use_detach_impl>,
             Trackers...
@@ -373,7 +255,7 @@ namespace d2 {
 
     template <typename Thread, typename ...Trackers>
     using std_thread_wrapper =
-        dyno::wrapper<
+        dyno::spy_as_wrapper<
             Thread,
             track_start_join_detach<
                 call_member_fn<decltype(&Thread::join), &Thread::join>,
@@ -487,13 +369,15 @@ namespace d2 {
         }
     };
 
+    struct end_of_program { };
+
     struct goodlock_analysis : build_lock_graph, build_segmentation_graph {
         using build_lock_graph::operator();
         using build_segmentation_graph::operator();
 
         template <typename Environment>
-        void operator()(dyno::end_of_program, Environment const&) const {
-            std::cout << "dyno::end_of_program" << std::endl;
+        void operator()(end_of_program, Environment const&) const {
+            std::cout << "end_of_program" << std::endl;
             #if 0
             return boost::graph::all_cycles(lock_graph)
                     | boost::adaptors::filtered(single_threaded_cycle)
@@ -503,10 +387,12 @@ namespace d2 {
             #endif
         }
     };
+
+    goodlock_analysis D2_FRAMEWORK;
 } // end namespace d2
 
-// clang++ -I /usr/lib/c++/v1 -ftemplate-backtrace-limit=0 -I /usr/local/include -stdlib=libc++ -std=c++11 -I ~/code/dyno/include -Wall -Wextra -pedantic -o/dev/null ~/code/sandbox/d2_brainstorm.cpp
-// g++-4.8 -std=c++11 -ftemplate-backtrace-limit=0 -I /usr/local/include -Wall -Wextra -pedantic -I ~/code/dyno/include -o/dev/null ~/code/sandbox/d2_brainstorm.cpp
+// clang++ -I /usr/lib/c++/v1 -ftemplate-backtrace-limit=0 -I /usr/local/include -stdlib=libc++ -std=c++11 -I ~/code/dyno/include -Wall -Wextra -pedantic ~/code/sandbox/d2_brainstorm.cpp -o/dev/null
+// g++-4.8 -std=c++11 -ftemplate-backtrace-limit=0 -I /usr/local/include -Wall -Wextra -pedantic -I ~/code/dyno/include ~/code/sandbox/d2_brainstorm.cpp -o/dev/null
 
 struct MutexMixin : d2::lockable_mixin<MutexMixin> {
     void lock_impl() { }
@@ -535,8 +421,6 @@ int main() {
     Thread t2([] {});
     t2.detach();
 }
-
-
 
 
 #if 0

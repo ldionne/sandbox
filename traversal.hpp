@@ -1,4 +1,7 @@
 
+#ifndef SANDBOX_TRAVERSAL_HPP
+#define SANDBOX_TRAVERSAL_HPP
+
 #include <boost/mpl/accumulate.hpp>
 #include <boost/mpl/and.hpp>
 #include <boost/mpl/apply.hpp>
@@ -115,3 +118,5 @@ namespace boost { namespace traverse {
         >
     { };
 }}
+
+#endif // !SANDBOX_TRAVERSAL_HPP
