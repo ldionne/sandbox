@@ -45,12 +45,18 @@ struct call_member_fn<R T::*, mfp> {
     )
 };
 
-template <typename Base>
-struct inherit_from : Base {
-    // using Base::Base;
+
+template <typename Op, typename Root, typename ...Bases>
+struct inherit_linearly {
+    typedef Root type;
 };
 
-struct empty_base { };
+template <typename Op, typename Root, typename Head, typename ...Tail>
+struct inherit_linearly<Op, Root, Head, Tail...> {
+    typedef typename Op::template apply<Head,
+        typename inherit_linearly<Op, Root, Tail...>::type
+    >::type type;
+};
 
 
 namespace d2 { struct goodlock_analysis; }
@@ -104,16 +110,10 @@ namespace dyno {
         struct type { };
     };
 
-    struct empty_tracker {
-        template <typename Derived, typename Dummy = empty_tracker>
-        struct apply { };
-    };
-
-    template <typename T>
-    struct last_tracker {
-        template <typename Derived>
-        struct apply : T {
-            // using T::T;
+    struct base_tracker {
+        template <typename Derived, typename Next>
+        struct apply : Next {
+            // using Next::Next;
 
         protected:
             Derived& derived()
@@ -138,23 +138,39 @@ namespace dyno {
 
     template <typename Derived>
     struct form_tracker {
-        template <typename Tracker>
+        template <typename Tracker, typename Next>
         struct apply {
-            typedef typename Tracker::template apply<Derived> type;
+            typedef typename Tracker::template apply<Derived, Next> type;
         };
     };
 
-    template <typename Derived, typename FirstTracker = empty_tracker, typename ...Trackers>
-    // struct mixin
-    //     : boost::mpl::inherit_linearly<
-    //         boost::mpl::vector<FirstTracker, Trackers...>,
-    //         form_tracker<Derived>
-    //     >
-    // { };
-    struct mixin : FirstTracker::template apply<Derived, Trackers..., last_tracker<empty_tracker> > { };
+    template <typename Derived, typename ...Trackers>
+    struct mixin
+        : inherit_linearly<
+            form_tracker<Derived>,
+            boost::mpl::empty_base,
+            Trackers..., base_tracker
+        >::type
+    { };
 
-    template <typename Wrapped, typename FirstTracker = empty_tracker, typename ...Trackers>
-    struct wrapper : FirstTracker::template apply<wrapper<Wrapped, FirstTracker, Trackers...>, Trackers..., last_tracker<Wrapped> > { };
+    template <typename Wrapped, typename ...Trackers>
+    struct wrapper
+        : inherit_linearly<
+            form_tracker<wrapper<Wrapped, Trackers...> >,
+            Wrapped,
+            Trackers..., base_tracker
+        >::type
+    {
+    private:
+        typedef typename inherit_linearly<
+            form_tracker<wrapper<Wrapped, Trackers...> >,
+            Wrapped,
+            Trackers..., base_tracker
+        >::type Base;
+
+    public:
+        // using Base::Base;
+    };
 }
 
 
@@ -209,8 +225,10 @@ namespace d2 {
     //////////////////////////////////////////////////////////////////////////
     template <typename LockImplementation>
     struct track_lock {
-        template <typename Derived, typename NextTracker, typename ...Rest>
-        struct apply : NextTracker::template apply<Derived, Rest...> {
+        template <typename Derived, typename Next>
+        struct apply : Next {
+            // using Next::Next;
+
             void lock() {
                 LockImplementation()(this->derived());
                 dyno::generate<
@@ -227,8 +245,9 @@ namespace d2 {
 
     template <typename UnlockImplementation>
     struct track_unlock {
-        template <typename Derived, typename NextTracker, typename ...Rest>
-        struct apply : NextTracker::template apply<Derived, Rest...> {
+        template <typename Derived, typename Next>
+        struct apply : Next {
+            // using Next::Next;
             void unlock() {
                 UnlockImplementation()(static_cast<Derived&>(*this));
                 dyno::generate<
@@ -266,8 +285,9 @@ namespace d2 {
     //////////////////////////////////////////////////////////////////////////
     template <typename TryLockImplementation>
     struct track_try_lock {
-        template <typename Derived, typename NextTracker, typename ...Rest>
-        struct apply : NextTracker::template apply<Derived, Rest...> {
+        template <typename Derived, typename Next>
+        struct apply : Next {
+            // using Next::Next;
             bool try_lock() noexcept {
                 return TryLockImplementation()(this->derived());
             }
@@ -421,21 +441,26 @@ namespace d2 {
 // clang++ -I /usr/lib/c++/v1 -ftemplate-backtrace-limit=0 -I /usr/local/include -stdlib=libc++ -std=c++11 -I ~/code/dyno/include -Wall -Wextra -pedantic -o/dev/null ~/code/sandbox/d2_brainstorm.cpp
 // g++-4.8 -std=c++11 -ftemplate-backtrace-limit=0 -I /usr/local/include -Wall -Wextra -pedantic -I ~/code/dyno/include -o/dev/null ~/code/sandbox/d2_brainstorm.cpp
 
-struct my_mutex : d2::lockable_mixin<my_mutex> {
+struct MutexMixin : d2::lockable_mixin<MutexMixin> {
     void lock_impl() { }
     void unlock_impl() { }
     bool try_lock_impl() { return true; }
 };
 
-typedef d2::lockable_wrapper<std::mutex> Mutex;
+typedef d2::lockable_wrapper<std::mutex> MutexWrapper;
 // typedef d2::std_thread_wrapper<std::thread> Thread;
 
 
 int main() {
-    my_mutex m;
-    m.lock();
-    m.unlock();
-    m.try_lock();
+    MutexMixin mix;
+    mix.lock();
+    mix.unlock();
+    mix.try_lock();
+
+    MutexWrapper wrap;
+    wrap.lock();
+    wrap.unlock();
+    wrap.try_lock();
 
     // Thread t([] {});
 }
