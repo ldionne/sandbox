@@ -1,17 +1,26 @@
 
-#include <boost/mpl/all_of.hpp>
+#include <boost/mpl/accumulate.hpp>
 #include <boost/mpl/and.hpp>
 #include <boost/mpl/apply.hpp>
 #include <boost/mpl/at.hpp>
 #include <boost/mpl/bool.hpp>
 #include <boost/mpl/int.hpp>
-#include <boost/mpl/joint_view.hpp>
 #include <boost/mpl/placeholders.hpp>
-#include <boost/mpl/sum.hpp>
+#include <boost/mpl/plus.hpp>
 #include <boost/mpl/transform.hpp>
+#include <boost/mpl/unpack_args.hpp>
 #include <boost/mpl/vector.hpp>
+#include <boost/mpl/zip_view.hpp>
 #include <boost/type_traits/is_same.hpp>
+#include <dyno/detail/mpl_extensions.hpp>
 
+
+namespace boost { namespace mpl {
+    template <typename Sequence>
+    struct sum
+        : accumulate<Sequence, int_<0>, plus<_1, _2> >
+    { };
+}}
 
 namespace boost { namespace traverse {
     template <typename Node>
@@ -20,19 +29,19 @@ namespace boost { namespace traverse {
     { };
 
     template <template <typename ...> class Node, typename ...Children>
-    struct is_leaf
+    struct is_leaf<Node<Children...> >
         : mpl::false_
     { };
 
 
     template <typename Node>
     struct arity
-        : mpl::unsigned_<0>
+        : mpl::int_<0>
     { };
 
     template <template <typename ...> class Node, typename ...Children>
     struct arity<Node<Children...> >
-        : mpl::unsigned_<sizeof(Children...)>
+        : mpl::int_<sizeof...(Children)>
     { };
 
 
@@ -59,15 +68,15 @@ namespace boost { namespace traverse {
     template <template <typename ...> class Node, typename ...Children1, typename ...Children2>
     struct matches<Node<Children1...>, Node<Children2...> >
         : mpl::and_<
-            mpl::bool_<sizeof(Children1...) == sizeof(Children2...)>,
+            mpl::bool_<sizeof...(Children1) == sizeof...(Children2)>,
             mpl::all_of<
-                mpl::joint_view<
+                mpl::zip_view<
                     mpl::vector<
                         mpl::vector<Children1...>,
                         mpl::vector<Children2...>
                     >
                 >,
-                matches<mpl::_1, mpl::_2>
+                mpl::unpack_args<matches<mpl::_1, mpl::_2> >
             >
         >
     { };
@@ -93,11 +102,11 @@ namespace boost { namespace traverse {
 
     template <typename Leaf>
     struct size
-        : mpl::unsigned_<1>
+        : mpl::int_<1>
     { };
 
     template <template <typename ...> class Node, typename ...Children>
-    struct size
+    struct size<Node<Children...> >
         : mpl::sum<
             typename mpl::transform<
                 mpl::vector<struct add_1_for_this_node, Children...>,
