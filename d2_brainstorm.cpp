@@ -1,5 +1,5 @@
 
-
+#include "traversal.hpp"
 #include <boost/fusion/include/as_map.hpp>
 #include <boost/fusion/include/map.hpp>
 #include <boost/fusion/include/mpl.hpp>
@@ -9,6 +9,7 @@
 #include <boost/mpl/bind.hpp>
 #include <boost/mpl/for_each.hpp>
 #include <boost/mpl/inherit_linearly.hpp>
+#include <boost/mpl/reverse.hpp>
 #include <boost/mpl/transform.hpp>
 #include <boost/mpl/vector.hpp>
 #include <boost/utility/enable_if.hpp>
@@ -23,6 +24,12 @@
 struct my_mutex;
 
 #define RETURNS(...) -> decltype(__VA_ARGS__) { return __VA_ARGS__; }
+
+// clang3.2 does not have inheriting constructors
+#define INHERIT_CONSTRUCTORS(Type, Base)                                    \
+    template <typename ...Args>                                             \
+    Type(Args&& ...args) : Base(std::forward<Args>(args)...) { }            \
+/**/
 
 template <typename MemberFunctionPointer, MemberFunctionPointer mfp>
 struct call_member_fn;
@@ -46,27 +53,14 @@ struct call_member_fn<R T::*, mfp> {
 };
 
 
-template <typename Op, typename Root, typename ...Bases>
-struct inherit_linearly {
-    typedef Root type;
-};
-
-template <typename Op, typename Root, typename Head, typename ...Tail>
-struct inherit_linearly<Op, Root, Head, Tail...> {
-    typedef typename Op::template apply<Head,
-        typename inherit_linearly<Op, Root, Tail...>::type
-    >::type type;
-};
-
-
 namespace d2 { struct goodlock_analysis; }
 
 
 namespace dyno {
     typedef boost::mpl::vector<d2::goodlock_analysis> FRAMEWORKS;
 
-    template <typename Pattern1, typename Pattern2>
-    struct matches : boost::is_same<Pattern1, Pattern2> { };
+    using boost::traverse::matches;
+    using boost::traverse::_;
 
     template <typename Pattern>
     struct convertible_to_matches {
@@ -89,7 +83,7 @@ namespace dyno {
         boost::mpl::for_each<FRAMEWORKS>(call_it<Event, Environment const>{env});
     }
 
-    template <typename Event, typename Environment>
+    template <typename Event>
     void generate() {
         generate<Event>(boost::fusion::map<>());
     }
@@ -103,6 +97,13 @@ namespace dyno {
 
 
     //////////////////////////////////////////////////////////////////////////
+    // program_states.hpp (i want these to be predefined points in the execution of a program where you can do stuff)
+    //////////////////////////////////////////////////////////////////////////
+    struct start_of_program { };
+    struct end_of_program { };
+
+
+    //////////////////////////////////////////////////////////////////////////
     // mixin_and_wrapper.hpp
     //////////////////////////////////////////////////////////////////////////
     template <typename Framework, typename Derived>
@@ -113,7 +114,7 @@ namespace dyno {
     struct base_tracker {
         template <typename Derived, typename Next>
         struct apply : Next {
-            // using Next::Next;
+            INHERIT_CONSTRUCTORS(apply, Next)
 
         protected:
             Derived& derived()
@@ -138,40 +139,45 @@ namespace dyno {
 
     template <typename Derived>
     struct form_tracker {
-        template <typename Tracker, typename Next>
+        template <typename Next, typename Tracker>
         struct apply {
             typedef typename Tracker::template apply<Derived, Next> type;
         };
     };
 
+    template <typename Derived, typename Basemost, typename ...Trackers>
+    struct inherit_trackers
+        : boost::mpl::inherit_linearly<
+            typename boost::mpl::reverse<
+                boost::mpl::vector<Trackers..., base_tracker>
+            >::type,
+            form_tracker<Derived>,
+            Basemost
+        >
+    { };
+
     template <typename Derived, typename ...Trackers>
     struct mixin
-        : inherit_linearly<
-            form_tracker<Derived>,
-            boost::mpl::empty_base,
-            Trackers..., base_tracker
+        : inherit_trackers<
+            Derived, boost::mpl::empty_base, Trackers...
         >::type
     { };
 
     template <typename Wrapped, typename ...Trackers>
     struct wrapper
-        : inherit_linearly<
-            form_tracker<wrapper<Wrapped, Trackers...> >,
-            Wrapped,
-            Trackers..., base_tracker
+        : inherit_trackers<
+            wrapper<Wrapped, Trackers...>, Wrapped, Trackers...
         >::type
     {
     private:
-        typedef typename inherit_linearly<
-            form_tracker<wrapper<Wrapped, Trackers...> >,
-            Wrapped,
-            Trackers..., base_tracker
-        >::type Base;
+        typedef typename inherit_trackers<
+                    wrapper<Wrapped, Trackers...>, Wrapped, Trackers...
+                >::type Base;
 
     public:
-        // using Base::Base;
+        INHERIT_CONSTRUCTORS(wrapper, Base)
     };
-}
+} // end namespace dyno
 
 
 
@@ -193,6 +199,8 @@ namespace d2 {
         D2_I_ACCESS_USE(lock_impl)
         D2_I_ACCESS_USE(unlock_impl)
         D2_I_ACCESS_USE(try_lock_impl)
+        D2_I_ACCESS_USE(join_impl)
+        D2_I_ACCESS_USE(detach_impl)
 #undef D2_I_ACCESS_USE
     };
 
@@ -223,11 +231,11 @@ namespace d2 {
     //////////////////////////////////////////////////////////////////////////
     // basic_lockable.hpp
     //////////////////////////////////////////////////////////////////////////
-    template <typename LockImplementation>
-    struct track_lock {
+    template <typename LockImplementation, typename UnlockImplementation>
+    struct track_lock_unlock {
         template <typename Derived, typename Next>
         struct apply : Next {
-            // using Next::Next;
+            INHERIT_CONSTRUCTORS(apply, Next)
 
             void lock() {
                 LockImplementation()(this->derived());
@@ -237,19 +245,11 @@ namespace d2 {
                         new_ownership<exclusive>,
                         synchronization_object<Derived>
                     >
-                >((dyno::key<dyno::_self>() = boost::cref(this->derived()),
-                   dyno::key<dyno::_args>() = std::tuple<>()));
+                >(dyno::key<dyno::_self>() = boost::cref(this->derived()));
             }
-        };
-    };
 
-    template <typename UnlockImplementation>
-    struct track_unlock {
-        template <typename Derived, typename Next>
-        struct apply : Next {
-            // using Next::Next;
             void unlock() {
-                UnlockImplementation()(static_cast<Derived&>(*this));
+                UnlockImplementation()(this->derived());
                 dyno::generate<
                     mutex_operation<
                         previous_ownership<exclusive>,
@@ -265,8 +265,7 @@ namespace d2 {
     using basic_lockable_mixin =
         dyno::mixin<
             Derived,
-            track_lock<access::use_lock_impl>,
-            track_unlock<access::use_unlock_impl>,
+            track_lock_unlock<access::use_lock_impl, access::use_unlock_impl>,
             Trackers...
         >;
 
@@ -274,8 +273,10 @@ namespace d2 {
     using basic_lockable_wrapper =
         dyno::wrapper<
             BasicLockable,
-            track_lock<call_member_fn<decltype(&BasicLockable::lock), &BasicLockable::lock> >,
-            track_unlock<call_member_fn<decltype(&BasicLockable::unlock), &BasicLockable::unlock> >,
+            track_lock_unlock<
+                call_member_fn<decltype(&BasicLockable::lock), &BasicLockable::lock>,
+                call_member_fn<decltype(&BasicLockable::unlock), &BasicLockable::unlock>
+            >,
             Trackers...
         >;
 
@@ -287,7 +288,8 @@ namespace d2 {
     struct track_try_lock {
         template <typename Derived, typename Next>
         struct apply : Next {
-            // using Next::Next;
+            INHERIT_CONSTRUCTORS(apply, Next)
+
             bool try_lock() noexcept {
                 return TryLockImplementation()(this->derived());
             }
@@ -329,14 +331,56 @@ namespace d2 {
     //////////////////////////////////////////////////////////////////////////
     // std_thread.hpp
     //////////////////////////////////////////////////////////////////////////
-    struct track_start;
-    struct track_join;
-    struct track_detach;
+    template <typename JoinImplementation, typename DetachImplementation>
+    struct track_start_join_detach {
+        template <typename Derived, typename Next>
+        struct apply : Next {
+            template <typename F, typename ...Args>
+            explicit apply(F&& f, Args&& ...args)
+                // Here, we would wrap the thread function
+                : Next([&] {
+                    return dyno::generate<start<parallelism_level<thread> > >(),
+                           void(), // bypass any `operator,` overload
+                           std::forward<F>(f)(std::forward<Args>(args)...);
+                })
+            { }
+
+            using Next::operator=;
+
+            void join() {
+                JoinImplementation()(this->derived());
+                dyno::generate<
+                    d2::join<parallelism_level<thread> >
+                >(dyno::key<dyno::_self>() = boost::cref(this->derived()));
+            }
+
+            void detach() {
+                DetachImplementation()(this->derived());
+                dyno::generate<
+                    d2::detach<parallelism_level<thread> >
+                >(dyno::key<dyno::_self>() = boost::cref(this->derived()));
+            }
+        };
+    };
+
     template <typename Derived, typename ...Trackers>
-    using std_thread_mixin = dyno::mixin<Derived, track_start, track_join, track_detach, Trackers...>;
+    using std_thread_mixin =
+        dyno::mixin<
+            Derived,
+            track_start_join_detach<access::use_join_impl, access::use_detach_impl>,
+            Trackers...
+        >;
 
     template <typename Thread, typename ...Trackers>
-    using std_thread_wrapper = dyno::wrapper<Thread, track_start, track_join, track_detach, Trackers...>;
+    using std_thread_wrapper =
+        dyno::wrapper<
+            Thread,
+            track_start_join_detach<
+                call_member_fn<decltype(&Thread::join), &Thread::join>,
+                call_member_fn<decltype(&Thread::detach), &Thread::detach>
+            >,
+            Trackers...
+        >;
 
 
     //////////////////////////////////////////////////////////////////////////
@@ -347,21 +391,12 @@ namespace d2 {
         void operator()(mutex_operation<
                             previous_ownership<none>,
                             new_ownership<exclusive>,
-                            synchronization_object<my_mutex>
+                            synchronization_object<dyno::_>
                         >,
-                        Environment const& env) const
+                        Environment const&) const
         {
-            auto& the_lock = boost::fusion::at_key<dyno::_self>(env);
-        }
-
-        template <typename ...Args>
-        void operator()(Args&& ...) const { }
-
-#if 0
-        boost::directed_graph<...> lock_graph;
-
-        void operator()(mutex_operation<previous_ownership<none>, new_ownership<exclusive>, synchronization_object<_> >,
-                        environment<tags::thread_id, tags::gatelocks, tags::mutex_id, tags::code_segment_id> env) {
+            std::cout << "mutex_operation<previous_ownership<none>, new_ownership<exclusive>, synchronization_object<dyno::_> >" << std::endl;
+            #if 0
             auto mutex = env[tags::mutex_id];
             add_vertex(mutex, lock_graph);
             for (auto gatelock: env[tags::gatelocks]) {
@@ -373,68 +408,100 @@ namespace d2 {
                     // we might want to tag the edge with the whole environment
                     add_edge(gatelock, mutex, lock_graph);
             }
+            #endif
         }
 
-        void operator()(mutex_operation<previous_ownership<exclusive>, new_ownership<none>, synchronization_object<_> >,
-                        environment<tags::thread_id, tags::gatelocks, tags::mutex_id, tags::code_segment_id> env) {
+        template <typename Environment>
+        void operator()(mutex_operation<
+                            previous_ownership<exclusive>,
+                            new_ownership<none>,
+                            synchronization_object<dyno::_>
+                        >,
+                        Environment const&) const
+        {
+            std::cout << "mutex_operation<previous_ownership<exclusive>, new_ownership<none>, synchronization_object<dyno::_> >" << std::endl;
             // nothing to do
         }
 
-        void operator()(mutex_operation<previous_ownership<none>, new_ownership<exclusive>, synchronization_object<mutex<recursiveness<recursive> > > >,
-                        environment<tags::thread_id, tags::gatelocks, tags::mutex_id, tags::code_segment_id, tags::recursive_lock_count> env) {
+        template <typename Environment>
+        void operator()(mutex_operation<
+                            previous_ownership<none>,
+                            new_ownership<exclusive>,
+                            synchronization_object<mutex<recursiveness<recursive> > >
+                        >,
+                        Environment const&) const
+        {
+            std::cout << "mutex_operation<previous_ownership<none>, new_ownership<exclusive>, synchronization_object<mutex<recursiveness<recursive> > > >" << std::endl;
+            #if 0
             if (env[tags::recursive_lock_count]++)
                 operator()(mutex_operation<previous_ownership<none>, new_ownership<exclusive>, synchronization_object<_> >(), env);
+            #endif
         }
 
-        void operator()(mutex_operation<previous_ownership<exclusive>, new_ownership<none>, synchronization_object<mutex<recursiveness<recursive> > > >,
-                        environment<tags::thread_id, tags::gatelocks, tags::mutex_id, tags::code_segment_id, tags::recursive_lock_count> env) {
+        template <typename Environment>
+        void operator()(mutex_operation<
+                            previous_ownership<exclusive>,
+                            new_ownership<none>,
+                            synchronization_object<mutex<recursiveness<recursive> > >
+                        >,
+                        Environment const&) const
+        {
+            std::cout << "mutex_operation<previous_ownership<exclusive>, new_ownership<none>, synchronization_object<mutex<recursiveness<recursive> > > >" << std::endl;
+            #if 0
             if (--env[tags::recursive_lock_count] == 0)
                 operator()(mutex_operation<previous_ownership<exclusive>, new_ownership<none>, synchronization_object<_> >(), env);
+            #endif
         }
-#endif
     };
 
     // Now let's define what to do when these operations happen
     struct build_segmentation_graph {
         template <typename Environment>
-        void operator()(start<parallelism_level<thread> >, Environment const&) const {
-
-        }
-
-    #if 0
-        boost::directed_graph<...> segmentation_graph;
-
-        void operator()(start<parallelism_level<thread> >,
-                        environment<tags::parent_segment, tags::child_segment, tags::new_parent_segment> env) {
+        void operator()(start<parallelism_level<thread> >, Environment const&) const
+        {
+            std::cout << "start<parallelism_level<thread> >" << std::endl;
+            #if 0
             add_vertex(env[tags::new_parent_segment], segmentation_graph);
             add_vertex(env[tags::child_segment], segmentation_graph);
             add_edge(env[tags::parent_segment], env[tags::new_parent_segment], segmentation_graph);
             add_edge(env[tags::parent_segment], env[tags::child_segment], segmentation_graph);
             env[tags::parent_segment] = env[tags::new_parent_segment];
+            #endif
         }
 
-        void operator()(join<parallelism_level<thread> >,
-                        environment<tags::parent_segment, tags::child_segment, tags::new_parent_segment> env) {
+        template <typename Environment>
+        void operator()(join<parallelism_level<thread> >, Environment const&) const
+        {
+            std::cout << "join<parallelism_level<thread> >" << std::endl;
+            #if 0
             add_vertex(env[tags::new_parent_segment], segmentation_graph);
             add_edge(env[tags::parent_segment], env[tags::new_parent_segment], segmentation_graph);
             add_edge(env[tags::child_segment], env[tags::new_parent_segment], segmentation_graph);
+            #endif
         }
-    #endif
+
+        template <typename Environment>
+        void operator()(detach<parallelism_level<thread> >, Environment const&) const
+        {
+            std::cout << "detach<parallelism_level<thread> >" << std::endl;
+        }
     };
 
     struct goodlock_analysis : build_lock_graph, build_segmentation_graph {
         using build_lock_graph::operator();
         using build_segmentation_graph::operator();
 
-    #if 0
-        auto operator()(end_of_program) {
+        template <typename Environment>
+        void operator()(dyno::end_of_program, Environment const&) const {
+            std::cout << "dyno::end_of_program" << std::endl;
+            #if 0
             return boost::graph::all_cycles(lock_graph)
                     | boost::adaptors::filtered(single_threaded_cycle)
                     | boost::adaptors::filtered(explicitly_ordered_segments)
                     | boost::adaptors::filtered(overlapping_gatelocks)
                     ;
+            #endif
         }
-    #endif
     };
 } // end namespace d2
 
@@ -448,7 +515,7 @@ struct MutexMixin : d2::lockable_mixin<MutexMixin> {
 };
 
 typedef d2::lockable_wrapper<std::mutex> MutexWrapper;
-// typedef d2::std_thread_wrapper<std::thread> Thread;
+typedef d2::std_thread_wrapper<std::thread> Thread;
 
 
 int main() {
@@ -462,19 +529,17 @@ int main() {
     wrap.unlock();
     wrap.try_lock();
 
-    // Thread t([] {});
+    Thread t1([] {});
+    t1.join();
+
+    Thread t2([] {});
+    t2.detach();
 }
 
 
 
 
-
-
-
-
-
 #if 0
-
 namespace d2 {
     // SharedLockable
     typedef mutex_operation<
@@ -520,3 +585,21 @@ namespace d2 {
 } // end namespace operations
 
 #endif
+
+
+template <typename Framework>
+struct type_erased_event_base {
+    virtual void call(Framework&) = 0;
+};
+
+template <typename Event, typename Environment, typename Framework>
+struct type_erased_event : type_erased_event_base<Framework> {
+    explicit type_erased_event(Environment& env) : env_(env) { }
+
+    virtual void call(Framework& framework) {
+        framework(Event(), env_);
+    }
+
+private:
+    Environment& env_;
+};
