@@ -74,14 +74,19 @@ namespace d2 {
     //////////////////////////////////////////////////////////////////////////
     struct build_lock_graph {
         template <typename Environment>
-        void operator()(mutex_operation<
+        void operator()(mutex_operation<dyno::and_<
                             previous_ownership<none>,
                             new_ownership<exclusive>,
-                            synchronization_object<dyno::_>
-                        >,
+                            synchronization_object<
+                                mutex<dyno::and_<
+                                    ownership<exclusive>,
+                                    recursiveness<non_recursive>
+                                > >
+                            >
+                        > >,
                         Environment const&) const
         {
-            std::cout << "mutex_operation<previous_ownership<none>, new_ownership<exclusive>, synchronization_object<dyno::_> >" << std::endl;
+            std::cout << "mutex_operation<previous_ownership<none>, new_ownership<exclusive>, synchronization_object<mutex<ownership<exclusive>, recursiveness<non_recursive> > > >" << std::endl;
             #if 0
             auto mutex = env[tags::mutex_id];
             add_vertex(mutex, lock_graph);
@@ -98,26 +103,36 @@ namespace d2 {
         }
 
         template <typename Environment>
-        void operator()(mutex_operation<
+        void operator()(mutex_operation<dyno::and_<
                             previous_ownership<exclusive>,
                             new_ownership<none>,
-                            synchronization_object<dyno::_>
-                        >,
+                            synchronization_object<
+                                mutex<dyno::and_<
+                                    ownership<exclusive>,
+                                    recursiveness<non_recursive>
+                                > >
+                            >
+                        > >,
                         Environment const&) const
         {
-            std::cout << "mutex_operation<previous_ownership<exclusive>, new_ownership<none>, synchronization_object<dyno::_> >" << std::endl;
+            std::cout << "mutex_operation<previous_ownership<exclusive>, new_ownership<none>, synchronization_object<mutex<ownership<exclusive>, recursiveness<non_recursive> > > >" << std::endl;
             // nothing to do
         }
 
         template <typename Environment>
-        void operator()(mutex_operation<
+        void operator()(mutex_operation<dyno::and_<
                             previous_ownership<none>,
                             new_ownership<exclusive>,
-                            synchronization_object<mutex<recursiveness<recursive> > >
-                        >,
+                            synchronization_object<
+                                mutex<dyno::and_<
+                                    ownership<dyno::_>,
+                                    recursiveness<recursive>
+                                > >
+                            >
+                        > >,
                         Environment const&) const
         {
-            std::cout << "mutex_operation<previous_ownership<none>, new_ownership<exclusive>, synchronization_object<mutex<recursiveness<recursive> > > >" << std::endl;
+            std::cout << "mutex_operation<previous_ownership<none>, new_ownership<exclusive>, synchronization_object<mutex<ownership<dyno::_>, recursiveness<recursive> > > >" << std::endl;
             #if 0
             if (env[tags::recursive_lock_count]++)
                 operator()(mutex_operation<previous_ownership<none>, new_ownership<exclusive>, synchronization_object<_> >(), env);
@@ -125,14 +140,19 @@ namespace d2 {
         }
 
         template <typename Environment>
-        void operator()(mutex_operation<
+        void operator()(mutex_operation<dyno::and_<
                             previous_ownership<exclusive>,
                             new_ownership<none>,
-                            synchronization_object<mutex<recursiveness<recursive> > >
-                        >,
+                            synchronization_object<
+                                mutex<dyno::and_<
+                                    ownership<dyno::_>,
+                                    recursiveness<recursive>
+                                > >
+                            >
+                        > >,
                         Environment const&) const
         {
-            std::cout << "mutex_operation<previous_ownership<exclusive>, new_ownership<none>, synchronization_object<mutex<recursiveness<recursive> > > >" << std::endl;
+            std::cout << "mutex_operation<previous_ownership<exclusive>, new_ownership<none>, synchronization_object<mutex<ownership<dyno::_>, recursiveness<recursive> > > > >" << std::endl;
             #if 0
             if (--env[tags::recursive_lock_count] == 0)
                 operator()(mutex_operation<previous_ownership<exclusive>, new_ownership<none>, synchronization_object<_> >(), env);
@@ -201,32 +221,44 @@ namespace d2 {
     { };
 } // end namespace d2
 
-// clang++ -I /usr/lib/c++/v1 -ftemplate-backtrace-limit=0 -I /usr/local/include -stdlib=libc++ -std=c++11 -I ~/code/dyno/include -Wall -Wextra -pedantic ~/code/sandbox/d2_brainstorm.cpp -o/dev/null
-// g++-4.8 -std=c++11 -ftemplate-backtrace-limit=0 -I /usr/local/include -Wall -Wextra -pedantic -I ~/code/dyno/include ~/code/sandbox/d2_brainstorm.cpp -o/dev/null
+// clang++ -I /usr/lib/c++/v1 -ftemplate-backtrace-limit=0 -I /usr/local/include -stdlib=libc++ -std=c++11 -I ~/code/dyno/include -Wall -Wextra -pedantic ~/code/sandbox/d2_brainstorm.cpp -o d2_brainstorm.out && ./d2_brainstorm.out && rm d2_brainstorm.out
+// g++-4.8 -std=c++11 -ftemplate-backtrace-limit=0 -I /usr/local/include -Wall -Wextra -pedantic -I ~/code/dyno/include ~/code/sandbox/d2_brainstorm.cpp -o d2_brainstorm.out && ./d2_brainstorm.out && rm d2_brainstorm.out
 
-struct WrappedMutex : std::mutex {
+
+// Wrapper over a std::mutex (or any other mutex with the same semantics)
+template <typename Mutex>
+struct std_mutex_wrapper : Mutex {
+private:
+    typedef d2::mutex<
+        d2::ownership<d2::exclusive>,
+        d2::recursiveness<d2::non_recursive>
+    > DescriptionOfSemantics;
+
+public:
     void lock() {
-        std::mutex::lock();
+        Mutex::lock();
         dyno::generate<
             d2::mutex_operation<
                 d2::previous_ownership<d2::none>,
                 d2::new_ownership<d2::exclusive>,
-                d2::synchronization_object<WrappedMutex>
+                d2::synchronization_object<DescriptionOfSemantics>
             >
         >(dyno::key<dyno::env::_this>() = this);
     }
 
     void unlock() {
-        std::mutex::unlock();
+        Mutex::unlock();
         dyno::generate<
             d2::mutex_operation<
                 d2::previous_ownership<d2::exclusive>,
                 d2::new_ownership<d2::none>,
-                d2::synchronization_object<WrappedMutex>
+                d2::synchronization_object<DescriptionOfSemantics>
             >
         >(dyno::key<dyno::env::_this>() = this);
     }
 };
+
+typedef std_mutex_wrapper<std::mutex> WrappedMutex;
 
 int main() {
     WrappedMutex wrap;

@@ -57,34 +57,6 @@ namespace boost { namespace traverse {
     { };
 
 
-    template <typename Tree1, typename Tree2>
-    struct matches
-        : is_same<Tree1, Tree2>
-    { };
-
-    struct _;
-    template <typename Tree> struct matches<_, Tree> : mpl::true_ { };
-    template <typename Tree> struct matches<Tree, _> : mpl::true_ { };
-    // remove ambiguity for matches<_, _>
-    template <> struct matches<_, _> : mpl::true_ { };
-
-    template <template <typename ...> class Node, typename ...Children1, typename ...Children2>
-    struct matches<Node<Children1...>, Node<Children2...> >
-        : mpl::and_<
-            mpl::bool_<sizeof...(Children1) == sizeof...(Children2)>,
-            mpl::all_of<
-                mpl::zip_view<
-                    mpl::vector<
-                        mpl::vector<Children1...>,
-                        mpl::vector<Children2...>
-                    >
-                >,
-                mpl::unpack_args<matches<mpl::_1, mpl::_2> >
-            >
-        >
-    { };
-
-
     template <typename Leaf, typename F>
     struct dfs
         : mpl::apply<F, Leaf>

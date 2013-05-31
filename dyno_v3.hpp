@@ -19,14 +19,97 @@
 //////////////////////////////////////////////////////////////////////////////
 // matches metafunction
 //////////////////////////////////////////////////////////////////////////////
-#include "traversal.hpp"
+#include <boost/mpl/and.hpp>
+#include <boost/mpl/bool.hpp>
+#include <boost/mpl/not.hpp>
+#include <boost/mpl/placeholders.hpp>
+#include <boost/mpl/unpack_args.hpp>
+#include <boost/mpl/vector.hpp>
+#include <boost/mpl/zip_view.hpp>
+#include <boost/type_traits/is_same.hpp>
+#include <dyno/detail/mpl_extensions.hpp>
 
 namespace dyno {
-// template <typename T, typename Pattern>
-// struct matches;
+//! By default, a type matches a pattern if they are the same.
+//! Note: specializing matches<T, T> makes it ambiguous with the Node<...>
+//!       specialization when Children1 is the same as Children2.
+template <typename T, typename Pattern>
+struct matches
+    : boost::is_same<T, Pattern>
+{ };
 
-using boost::traverse::matches;
-using boost::traverse::_;
+//! Two template classes match if their template parameters match side by side.
+template <template <typename ...> class Node, typename ...Children1, typename ...Children2>
+struct matches<Node<Children1...>, Node<Children2...> >
+    : boost::mpl::and_<
+        boost::mpl::bool_<sizeof...(Children1) == sizeof...(Children2)>,
+        boost::mpl::all_of<
+            boost::mpl::zip_view<
+                boost::mpl::vector<
+                    boost::mpl::vector<Children1...>,
+                    boost::mpl::vector<Children2...>
+                >
+            >,
+            boost::mpl::unpack_args<matches<boost::mpl::_1, boost::mpl::_2> >
+        >
+    >
+{ };
+
+//! Matches anything.
+struct _;
+template <typename T>
+struct matches<T, _>
+    : boost::mpl::true_
+{ };
+
+//! Matches if any of the patterns match.
+template <typename ...> struct or_;
+template <typename T, typename ...Patterns>
+struct matches<T, or_<Patterns...> >
+    : boost::mpl::any_of<
+        boost::mpl::vector<Patterns...>,
+        matches<T, boost::mpl::_1>
+    >
+{ };
+
+//! Matches if all of the patterns match.
+template <typename ...> struct and_;
+template <typename T, typename ...Patterns>
+struct matches<T, and_<Patterns...> >
+    : boost::mpl::all_of<
+        boost::mpl::vector<Patterns...>,
+        matches<T, boost::mpl::_1>
+    >
+{ };
+
+//! Matches iff the pattern does not match.
+template <typename> struct not_;
+template <typename T, typename Pattern>
+struct matches<T, not_<Pattern> >
+    : boost::mpl::not_<matches<T, Pattern> >
+{ };
+
+namespace matches_detail {
+    template <typename ...Patterns>
+    struct match_any_of {
+        template <typename T>
+        struct apply
+            : boost::mpl::any_of<
+                boost::mpl::vector<Patterns...>,
+                matches<T, boost::mpl::_1>
+            >
+        { };
+    };
+}
+
+//! Matches if all of the children of the node matches any of the patterns.
+template <template <typename ...> class Node, typename ...Children, typename ...Patterns>
+struct matches<Node<Children...>, Node<and_<Patterns...> > >
+    : boost::mpl::all_of<
+        boost::mpl::vector<Children...>,
+        matches_detail::match_any_of<Patterns...>
+    >
+{ };
 } // end namespace dyno
 
 
@@ -135,11 +218,11 @@ struct _args;
 
 namespace dyno {
 namespace generate_detail {
-    template <typename Pattern>
+    template <typename Event>
     struct convertible_if_matches {
-        template <typename T, typename =
-            typename boost::enable_if<matches<T, Pattern> >::type>
-        operator T() const { return T(); }
+        template <typename Pattern, typename =
+            typename boost::enable_if<matches<Event, Pattern> >::type>
+        operator Pattern() const { return Pattern(); }
     };
 
     template <typename Event, typename Environment>
