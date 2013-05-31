@@ -148,7 +148,7 @@ namespace dyno {
  *
  * @warning
  * This way of spying may not be suitable for classes used in a polymorphic
- * manner. Be warry of object slicing!
+ * manner. Be wary of object slicing!
  *
  *
  * ## Notation
@@ -297,8 +297,13 @@ public:
 //////////////////////////////////////////////////////////////////////////////
 // generate
 //////////////////////////////////////////////////////////////////////////////
-#include <boost/fusion/include/for_each.hpp>
 #include <boost/fusion/include/map.hpp>
+#include <boost/mpl/back_inserter.hpp>
+#include <boost/mpl/for_each.hpp>
+#include <boost/mpl/placeholders.hpp>
+#include <boost/mpl/transform.hpp>
+#include <boost/mpl/vector.hpp>
+#include <boost/type_traits/add_pointer.hpp>
 #include <boost/utility/enable_if.hpp>
 
 namespace dyno {
@@ -314,8 +319,8 @@ namespace generate_detail {
     struct call_listener {
         Environment& env_;
         template <typename Listener>
-        void operator()(Listener const& listener) const {
-            listener(convertible_if_matches<Event>(), env_);
+        void operator()(Listener*) {
+            instance_of<Listener>()(convertible_if_matches<Event>(), env_);
         }
     };
 } // end namespace generate_detail
@@ -327,8 +332,12 @@ template <typename Event, typename Environment>
 void generate(Environment const& env) {
     generate_detail::call_listener<Event, Environment const> call = {env};
     typedef typename domain_of<Event>::type Domain;
-    boost::fusion::for_each(Domain::static_listeners(), call);
-    // boost::for_each(Domain::dynamic_listeners, call); // not ready yet
+    typedef typename boost::mpl::transform<
+        typename Domain::static_listeners,
+        boost::add_pointer<boost::mpl::_1>,
+        boost::mpl::back_inserter<boost::mpl::vector<> >
+    >::type ListenersWithoutInstantiation;
+    boost::mpl::for_each<ListenersWithoutInstantiation>(call);
 }
 
 /*!
@@ -349,8 +358,13 @@ namespace dyno {
 /*!
  * Specification of the `Domain` concept.
  *
- * A domain regroups listeners interested into being notified when any event
+ * Conceptually, a domain regroups the listeners to notify when any event
  * from a set of events is triggered.
+ *
+ * All domains have a super-domain whose events are more general. Members of
+ * a domain are also automatically members of all the sub-domains of that
+ * domain. The most general domain is `root_domain` and it is its own
+ * super-domain.
  *
  *
  * ## Notation
@@ -360,9 +374,10 @@ namespace dyno {
  *
  *
  * ## Valid expressions
- * | Expression              | Return type                                                        | Semantics
- * | ----------              | -----------                                                        | ---------
- * | `D::static_listeners()` | A Boost.Fusion `Sequence` of types modeling the `Listener` concept | Returns the set of listeners that were registered to that domain at compile-time.
+ * | Expression            | Return type                                                     | Semantics
+ * | ----------            | -----------                                                     | ---------
+ * | `D::static_listeners` | A Boost.MPL `Sequence` of types modeling the `Listener` concept | Returns the set of listeners that were registered to that domain or its super-domain at compile-time.
+ * | `D::super_domain`     | A type modeling the `Domain` concept                            | Returns the super-domain of a domain.
  *
  *
  * @tparam D
@@ -375,21 +390,41 @@ struct Domain;
 
 
 //////////////////////////////////////////////////////////////////////////////
-// domain default implementation
+// default implementation of a domain
 //////////////////////////////////////////////////////////////////////////////
-#include <boost/fusion/include/vector.hpp>
+#include <boost/mpl/joint_view.hpp>
+#include <boost/mpl/vector.hpp>
 
 namespace dyno {
 /*!
  *
  */
-template <typename ...Listeners>
+template <typename Superdomain, typename ...Listeners>
 struct domain {
-    static boost::fusion::vector<Listeners&...> static_listeners() {
-        return boost::fusion::vector<Listeners&...>(
-                                        instance_of<Listeners>()...);
-    }
+    typedef Superdomain super_domain;
+
+    typedef boost::mpl::joint_view<
+        boost::mpl::vector<Listeners...>,
+        typename super_domain::static_listeners
+    > static_listeners;
 };
+} // end namespace dyno
+
+
+
+//////////////////////////////////////////////////////////////////////////////
+// root_domain
+//////////////////////////////////////////////////////////////////////////////
+#include <boost/mpl/vector.hpp>
+
+namespace dyno {
+    /*!
+     *
+     */
+    struct root_domain {
+        typedef root_domain super_domain;
+        typedef boost::mpl::vector<> static_listeners;
+    };
 } // end namespace dyno
 
 

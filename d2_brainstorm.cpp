@@ -1,5 +1,6 @@
 
 #include "dyno_concepts.hpp"
+#include <atomic>
 #include <boost/fusion/include/as_map.hpp>
 #include <boost/fusion/include/map.hpp>
 #include <boost/fusion/include/mpl.hpp>
@@ -78,7 +79,10 @@ namespace d2 {
     //////////////////////////////////////////////////////////////////////////
     // mutex_events.hpp
     //////////////////////////////////////////////////////////////////////////
-    template <typename ...Characteristics> struct mutex;
+    struct mutex_event_domain;
+
+    template <typename ...Characteristics>
+    struct mutex { typedef mutex_event_domain dyno_domain; };
     // characteristics of mutexes:
     template <typename> struct ownership; // how many threads can own the mutex at a time?
     struct none;
@@ -91,7 +95,6 @@ namespace d2 {
     struct recursive;
 
 
-    struct mutex_event_domain;
     template <typename ...Characteristics>
     struct mutex_operation { typedef mutex_event_domain dyno_domain; };
     // characteristics of all operations on mutexes:
@@ -213,11 +216,10 @@ namespace d2 {
         struct apply : Next {
             template <typename F, typename ...Args>
             explicit apply(F&& f, Args&& ...args)
-                // Here, we would wrap the thread function
-                : Next([&] {
+                : Next([=] { // need to copy everything because it will be run in a new thread
                     return dyno::generate<start<parallelism_level<thread> > >(),
                            void(), // bypass any `operator,` overload
-                           std::forward<F>(f)(std::forward<Args>(args)...);
+                           std::move(f)(std::move(args)...);
                 })
             { }
 
@@ -263,6 +265,29 @@ namespace d2 {
     // build_lock_graph.hpp
     //////////////////////////////////////////////////////////////////////////
     struct build_lock_graph {
+        static unsigned long get_new_id() {
+            static std::atomic<unsigned long> lock_id;
+            return lock_id++;
+        }
+
+        template <typename Int>
+        struct get_new_id_on_construction {
+            get_new_id_on_construction() : value_(get_new_id()) { }
+            operator Int() const { return value_; }
+            Int value_;
+        };
+
+        template <typename SynchronizationObject, typename Next, typename Enable = void>
+        struct tracker : Next { };
+
+        template <typename SynchronizationObject, typename Next>
+        struct tracker<SynchronizationObject, Next, typename boost::enable_if<
+            dyno::matches<mutex<dyno::_> , SynchronizationObject>
+        >::type> : Next
+        {
+            get_new_id_on_construction<unsigned long> lock_id;
+        };
+
         template <typename Environment>
         void operator()(mutex_operation<
                             previous_ownership<none>,
@@ -383,11 +408,11 @@ namespace d2 {
     };
 
     struct mutex_event_domain
-        : dyno::domain<goodlock_analysis>
+        : dyno::domain<dyno::root_domain, goodlock_analysis>
     { };
 
     struct thread_sync_domain
-        : dyno::domain<goodlock_analysis>
+        : dyno::domain<dyno::root_domain, goodlock_analysis>
     { };
 } // end namespace d2
 
