@@ -158,6 +158,10 @@ namespace dyno {
  * in a program. The sole purpose of an event is to serve as a type tag
  * to find the right overload when calling a `Listener`.
  *
+ * Related events are categorized into `Domain`s. When creating a new _family_
+ * of events, it is a good idea to create a new domain for those events.
+ * Events are aware of their domain, but the converse is not true.
+ *
  *
  * ## Notation
  * | Expression | Description
@@ -295,6 +299,54 @@ namespace dyno {
  */
 template <typename D>
 struct Domain;
+} // end namespace dyno
+
+
+
+//////////////////////////////////////////////////////////////////////////////
+// Listener concept
+//////////////////////////////////////////////////////////////////////////////
+namespace dyno {
+/*!
+ * Specification of the `Listener` concept.
+ *
+ * A listener is a function object called whenever an event is generated in
+ * one of the domains it is a member of.
+ *
+ * The first parameter must be a model of the `Event` concept. Pattern
+ * matching may be used when declaring the parameter. That pattern is
+ * what must be matched by an `Event` in order for this overload of
+ * `operator()` to be picked. When an event is generated, __dyno__ will
+ * call the overload with a first parameter that `matches` the event that
+ * was generated. See `matches` for more information on patterns.
+ *
+ * The second parameter is an unspecified type modeling the Boost.Fusion
+ * `AssociativeSequence` concept. When the listener is called, this will
+ * be a compile-time map containing all of the environment variables
+ * accessible to the listener.
+ *
+ *
+ * ## Notation
+ * | Expression    | Description
+ * | ----------    | -----------
+ * | `L`           | A type modeling the `Listener` concept
+ * | `listener`    | An instance of type `L`
+ * | `E`           | A type convertible to any type matching some model of the `Event` concept
+ * | `Environment` | A type modeling the Boost.Fusion `AssociativeSequence` concept
+ * | `env`         | An instance of type `Environment`
+ *
+ *
+ * ## Valid expressions
+ * | Expression           | Return type | Semantics
+ * | ----------           | ----------- | ---------
+ * | `listener(E(), env)` | `void`      | Perform the action matched by `E`.
+ *
+ *
+ * @tparam L
+ *         The type to be tested for modeling of the `Listener` concept.
+ */
+template <typename L>
+struct Listener;
 } // end namespace dyno
 
 

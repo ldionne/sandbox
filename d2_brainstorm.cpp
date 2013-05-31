@@ -1,35 +1,16 @@
 
 #include "dyno_v3.hpp"
-#include <atomic>
-#include <boost/fusion/include/as_map.hpp>
-#include <boost/fusion/include/map.hpp>
-#include <boost/fusion/include/mpl.hpp>
-#include <boost/fusion/include/transform.hpp>
-#include <boost/fusion/include/vector.hpp>
-#include <boost/fusion/include/zip_view.hpp>
-#include <boost/mpl/bind.hpp>
-#include <boost/mpl/for_each.hpp>
-#include <boost/mpl/inherit_linearly.hpp>
-#include <boost/mpl/reverse.hpp>
-#include <boost/mpl/transform.hpp>
-#include <boost/mpl/vector.hpp>
-#include <boost/utility/enable_if.hpp>
+#include <boost/graph/directed_graph.hpp>
 #include <dyno/model/easy_map.hpp>
 #include <iostream>
 #include <mutex>
-#include <thread>
-#include <tuple>
-#include <utility>
 
 
 namespace d2 {
     //////////////////////////////////////////////////////////////////////////
     // mutex_events.hpp
     //////////////////////////////////////////////////////////////////////////
-    struct mutex_event_domain;
-
-    template <typename ...Characteristics>
-    struct mutex { typedef mutex_event_domain dyno_domain; };
+    template <typename ...Characteristics> struct mutex;
     // characteristics of mutexes:
     template <typename> struct ownership; // how many threads can own the mutex at a time?
     struct none;
@@ -42,6 +23,7 @@ namespace d2 {
     struct recursive;
 
 
+    struct mutex_event_domain;
     template <typename ...Characteristics>
     struct mutex_operation { typedef mutex_event_domain dyno_domain; };
     // characteristics of all operations on mutexes:
@@ -73,6 +55,8 @@ namespace d2 {
     // build_lock_graph.hpp
     //////////////////////////////////////////////////////////////////////////
     struct build_lock_graph {
+        boost::directed_graph<> lock_graph;
+
         template <typename Environment>
         void operator()(mutex_operation<dyno::and_<
                             previous_ownership<none>,
@@ -162,6 +146,8 @@ namespace d2 {
 
     // Now let's define what to do when these operations happen
     struct build_segmentation_graph {
+        boost::directed_graph<> segmentation_graph;
+
         template <typename Environment>
         void operator()(start<parallelism_level<thread> >, Environment const&) const
         {
