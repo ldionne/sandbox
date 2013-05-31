@@ -1,9 +1,11 @@
 
+#include <boost/mpl/bool.hpp>
 #include <boost/mpl/empty_base.hpp>
 #include <boost/mpl/identity.hpp>
 #include <boost/mpl/inherit_linearly.hpp>
 #include <boost/mpl/reverse.hpp>
 #include <boost/mpl/vector.hpp>
+#include <boost/type_traits/is_void.hpp>
 #include <chrono>
 #include <functional>
 #include <iostream>
@@ -11,6 +13,7 @@
 
 
 namespace dyno {
+#if 0
 //////////////////////////////////////////////////////////////////////////////
 // Both ends of the pipeline
 //////////////////////////////////////////////////////////////////////////////
@@ -45,15 +48,6 @@ private:
     using typename Next::wrapped_type;
     wrapped_type& wrapped() = delete;
     wrapped_type const& wrapped() const = delete;
-};
-
-template <typename Part>
-struct pipe_into {
-    template <typename Action>
-    static auto call(Part& part, Action&& action)
-   -> decltype(part(std::forward<Action>(action))) {
-        return part(std::forward<Action>(action));
-    }
 };
 
 
@@ -100,42 +94,104 @@ struct pipeline_as_mixin
     >::type
 { };
 
+#endif
+
+
+
+//////////////////////////////////////////////////////////////////////////////
+// Basic components to create pipelines
+//////////////////////////////////////////////////////////////////////////////
+template <typename Part>
+struct pipe_into {
+    template <typename ...Args>
+    static void call(Args&& ...args) {
+        Part::call(std::forward<Args>(args)...);
+    }
+};
+
+struct bottom {
+    template <typename ...Args>
+    static void call(Args&& ...) { }
+};
+
+namespace pipeline_detail {
+    template <template <typename> class ...Parts> struct make_pipeline;
+    template <template <typename> class LastPart>
+    struct make_pipeline<LastPart> {
+        typedef LastPart<bottom> type;
+    };
+
+    template <template <typename> class Head, template <typename> class ...Tail>
+    struct make_pipeline<Head, Tail...> {
+        typedef Head<typename make_pipeline<Tail...>::type> type;
+    };
+} // end namespace pipeline_detail
+
+template <template <typename Next> class ...Parts>
+using pipeline = typename pipeline_detail::make_pipeline<Parts...>::type;
+
 
 
 //////////////////////////////////////////////////////////////////////////////
 // Super generic pipeline parts
 //////////////////////////////////////////////////////////////////////////////
-template <typename Next>
-struct benchmark : Next {
-    template <typename Action>
-    void operator()(Action&& action) {
+template <typename Next = bottom>
+struct benchmark {
+    template <typename ...Args>
+    static void call(Args&& ...args) {
+        std::cout << "start timer\n";
         auto start = std::chrono::high_resolution_clock::now();
-        pipe_into<Next>::call(*this, std::forward<Action>(action));
+        pipe_into<Next>::call(std::forward<Args>(args)...);
         auto end = std::chrono::high_resolution_clock::now();
-        std::cout << (end - start).count() << '\n';
+        std::cout << "stop timer: " << (end - start).count() << " elapsed\n";
     }
 };
 
-template <typename Next>
-struct nothing : Next {
-    template <typename Action>
-    void operator()(Action&& action) {
-        pipe_into<Next>::call(*this, std::forward<Action>(action));
+template <typename Next = bottom>
+struct forward {
+    template <typename SemanticTag, typename ...Args>
+    static void call(Args&& ...args) {
+        std::cout << "do nothing\n";
+        pipe_into<Next>::call(std::forward<Args>(args)...);
     }
 };
 
-template <typename Next>
-struct generate_right_after : Next {
-    template <typename Action>
-    void operator()(Action&& action) {
-        pipe_into<Next>::call(*this, std::forward<Action>(action));
+template <typename Next = bottom>
+struct invoke {
+    template <typename F, typename ...Args>
+    static void call(F&& f, Args&& ...args) {
+        std::cout << "invoke function\n";
+        do_call(typename boost::is_void<
+                    decltype(std::forward<F>(f)(std::forward<Args>(args)...))
+                >::type(),
+                std::forward<F>(f), std::forward<Args>(args)...);
+    }
+
+private:
+    template <typename F, typename ...Args>
+    static void do_call(boost::mpl::true_, F&& f, Args&& ...args) {
+        std::forward<F>(f)(std::forward<Args>(args)...);
+        pipe_into<Next>::call();
+    }
+
+    template <typename F, typename ...Args>
+    static void do_call(boost::mpl::false_, F&& f, Args&& ...args) {
+        pipe_into<Next>::call(std::forward<F>(f)(std::forward<Args>(args)...));
+    }
+};
+
+template <typename Next = bottom>
+struct generate_right_after {
+    template <typename ...Args>
+    static void call(Args&& ...args) {
+        pipe_into<Next>::call(std::forward<Args>(args)...);
         // generate here
-        std::cout << "I GENERATED\n";
+        std::cout << "generate event\n";
     }
 };
 } // end namespace dyno
 
-
+#if 0
 //////////////////////////////////////////////////////////////////////////////
 // Put some interface onto a pipeline and launch it
 //////////////////////////////////////////////////////////////////////////////
@@ -158,12 +214,24 @@ struct wrapper_lock_interface : Next {
 
 
 typedef dyno::pipeline_as_wrapper<std::mutex, wrapper_lock_interface, dyno::generate_right_after> WrappedMutex;
-
+#endif
 
 // clang++ -I /usr/lib/c++/v1 -ftemplate-backtrace-limit=0 -I /usr/local/include -stdlib=libc++ -std=c++11 -I ~/code/dyno/include -Wall -Wextra -pedantic ~/code/sandbox/pipeline.cpp -o/dev/null
+// g++-4.8 -std=c++11 -ftemplate-backtrace-limit=0 -I /usr/local/include -Wall -Wextra -pedantic -I ~/code/dyno/include ~/code/sandbox/pipeline.cpp -o/dev/null
+
+using namespace dyno;
+typedef pipeline<benchmark, generate_right_after, invoke> Benchmarker;
+
+
+void function() {
+    for (int i = 0; i < 1000; ++i)
+        ;
+}
+
 
 int main() {
-    WrappedMutex m;
-    m.lock();
-    m.unlock();
+    Benchmarker::call(function);
+    // WrappedMutex m;
+    // m.lock();
+    // m.unlock();
 }
