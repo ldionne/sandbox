@@ -4,7 +4,6 @@
 #include <boost/fusion/include/has_key.hpp>
 #include <boost/graph/directed_graph.hpp>
 #include <boost/mpl/assert.hpp>
-#include <boost/mpl/joint_view.hpp>
 #include <boost/mpl/vector.hpp>
 #include <dyno/model/easy_map.hpp>
 #include <iostream>
@@ -63,50 +62,29 @@ namespace d2 {
     // build_lock_graph.hpp
     //////////////////////////////////////////////////////////////////////////
     namespace env {
-        struct _lock_id {
-            typedef boost::mpl::vector<> depends_on;
-            template <typename Event, typename Environment>
-            void operator()(Event const&, Environment const&) { }
-        };
-
-        struct _gatelocks {
-            typedef boost::mpl::vector<_lock_id> depends_on;
-
-            // Whenever a lock is acquired, we add its lock_id to the gatelocks.
-            template <typename Environment>
-            void operator()(mutex_operation<dyno::and_<previous_ownership<none>, new_ownership<exclusive>, synchronization_object<dyno::_> > >,
-                            Environment& env) {
-                BOOST_MPL_ASSERT((boost::fusion::result_of::has_key<
-                    Environment, _gatelocks
-                >));
-                BOOST_MPL_ASSERT((boost::fusion::result_of::has_key<
-                    Environment, _lock_id
-                >));
-                // auto& held_locks = boost::fusion::at_key<_gatelocks>(env);
-                // held_locks.insert(boost::fusion::at_key<_lock_id>(env));
-            }
-
-            // Whenever a lock is released, we remove its lock_id from the gatelocks.
-            template <typename Environment>
-            void operator()(mutex_operation<dyno::and_<previous_ownership<exclusive>, new_ownership<none>, synchronization_object<dyno::_> > >,
-                            Environment& env) {
-                BOOST_MPL_ASSERT((boost::fusion::result_of::has_key<
-                    Environment, _gatelocks
-                >));
-                BOOST_MPL_ASSERT((boost::fusion::result_of::has_key<
-                    Environment, _lock_id
-                >));
-                // auto& held_locks = boost::fusion::at_key<_gatelocks>(env);
-                // held_locks.erase(boost::fusion::at_key<_lock_id>(env));
-            }
-        };
+        struct _gatelocks;
+        struct _lock_id;
     }
 
     struct build_lock_graph {
         boost::directed_graph<> lock_graph;
 
-        typedef boost::mpl::vector<env::_gatelocks> depends_on;
+    private:
+        // Whenever a lock is acquired, we add its lock_id to the gatelocks.
+        template <typename Environment>
+        static void update_gatelocks_on_acquire(Environment& env) {
+            auto& held_locks = boost::fusion::at_key<d2::env::_gatelocks>(env);
+            held_locks.insert(boost::fusion::at_key<d2::env::_lock_id>(env));
+        }
 
+        // Whenever a lock is released, we remove its lock_id from the gatelocks.
+        template <typename Environment>
+        static void update_gatelocks_on_release(Environment& env) {
+            auto& held_locks = boost::fusion::at_key<d2::env::_gatelocks>(env);
+            held_locks.erase(boost::fusion::at_key<d2::env::_lock_id>(env));
+        }
+
+    public:
         template <typename Environment>
         void operator()(mutex_operation<dyno::and_<
                             previous_ownership<none>,
@@ -118,17 +96,12 @@ namespace d2 {
                                 > >
                             >
                         > >,
-                        Environment const&) const
+                        Environment&) const
         {
-            BOOST_MPL_ASSERT((boost::fusion::result_of::has_key<
-                Environment, d2::env::_gatelocks
-            >));
-            BOOST_MPL_ASSERT((boost::fusion::result_of::has_key<
-                Environment, d2::env::_lock_id
-            >));
-
             std::cout << "mutex_operation<previous_ownership<none>, new_ownership<exclusive>, synchronization_object<mutex<ownership<exclusive>, recursiveness<non_recursive> > > >" << std::endl;
             #if 0
+            update_gatelocks_on_acquire(env);
+
             auto mutex = env[tags::mutex_id];
             add_vertex(mutex, lock_graph);
             for (auto gatelock: env[tags::gatelocks]) {
@@ -157,7 +130,9 @@ namespace d2 {
                         Environment const&) const
         {
             std::cout << "mutex_operation<previous_ownership<exclusive>, new_ownership<none>, synchronization_object<mutex<ownership<exclusive>, recursiveness<non_recursive> > > >" << std::endl;
-            // nothing to do
+            #if 0
+            update_gatelocks_on_release(env);
+            #endif
         }
 
         template <typename Environment>
@@ -203,8 +178,6 @@ namespace d2 {
 
     // Now let's define what to do when these operations happen
     struct build_segmentation_graph {
-        typedef boost::mpl::vector<> depends_on;
-
         boost::directed_graph<> segmentation_graph;
 
         template <typename Environment>
@@ -243,10 +216,6 @@ namespace d2 {
     struct goodlock_analysis : build_lock_graph, build_segmentation_graph {
         using build_lock_graph::operator();
         using build_segmentation_graph::operator();
-        typedef boost::mpl::joint_view<
-            build_lock_graph::depends_on,
-            build_segmentation_graph::depends_on
-        > depends_on;
 
         template <typename Environment>
         void operator()(end_of_program, Environment const&) const {

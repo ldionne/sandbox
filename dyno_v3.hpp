@@ -239,28 +239,11 @@ namespace generate_detail {
     { };
 
     template <typename Event, typename Environment>
-    struct call_final {
+    struct call_listener {
         Environment& shared_env;
         template <typename Listener>
         void operator()(Listener*) {
             instance_of<Listener>()(convertible_if_matches<Event>(), shared_env);
-        }
-    };
-
-    template <typename Event, typename Environment>
-    struct call_listener {
-        Environment env_copy;
-        template <typename Listener>
-        void operator()(Listener*) {
-            typedef typename topological_ordering_of_dependencies_of<
-                Listener
-            >::type OrderedDependencies;
-
-            boost::mpl::for_each<
-                typename pointers_to<OrderedDependencies>::type
-            >(call_final<Event, Environment>{env_copy})
-
-            instance_of<Listener>()(convertible_if_matches<Event>(), env_copy);
         }
     };
 } // end namespace generate_detail
@@ -269,7 +252,7 @@ namespace generate_detail {
  *
  */
 template <typename Event, typename Environment>
-void generate(Environment const& env) {
+void generate(Environment env) {
     typedef typename domain_of<Event>::type Domain;
     typedef typename generate_detail::pointers_to<
         typename Domain::static_listeners
@@ -348,7 +331,8 @@ namespace dyno {
  * The second parameter is an unspecified type modeling the Boost.Fusion
  * `AssociativeSequence` concept. When the listener is called, this will
  * be a compile-time map containing all of the environment variables
- * accessible to the listener.
+ * accessible to the listener. This environment is shared by all the
+ * listeners of the domain.
  *
  *
  * ## Notation
