@@ -32,6 +32,39 @@ using boost::traverse::_;
 
 
 //////////////////////////////////////////////////////////////////////////////
+// domain_of metafunction
+//////////////////////////////////////////////////////////////////////////////
+namespace dyno {
+    /*!
+     *
+     */
+    template <typename Event>
+    struct domain_of {
+        typedef typename Event::dyno_domain type;
+    };
+} // end namespace dyno
+
+
+
+//////////////////////////////////////////////////////////////////////////////
+// instance_of
+//////////////////////////////////////////////////////////////////////////////
+namespace dyno {
+    /*!
+     * We need a way to deal with the lifetime of listeners. While we access
+     * the instance with this function, we should _not_ only return a
+     * reference to a static inside of it.
+     */
+    template <typename Listener>
+    Listener& instance_of() {
+        static Listener the_only_instance_in_the_program;
+        return the_only_instance_in_the_program;
+    }
+}
+
+
+
+//////////////////////////////////////////////////////////////////////////////
 // Event concept
 //////////////////////////////////////////////////////////////////////////////
 namespace dyno {
@@ -54,9 +87,10 @@ namespace dyno {
  * In addition to be `DefaultConstructible` and `CopyConstructible`, the
  * following expressions must be valid and have the described semantics.
  *
- * | Expression                  | Return type    | Semantics
- * | ----------                  | -----------    | ---------
- * | `matches<E, Pattern>::type` | See `matches`. | See `matches`.
+ * | Expression                  | Return type                      | Semantics
+ * | ----------                  | -----------                      | ---------
+ * | `matches<E, Pattern>::type` | See `matches`                    | See `matches`
+ * | `domain_of<E>::type`        | A model of the `Domain` concept  | Returns the domain categorizing `E`.
  *
  *
  * @tparam E
@@ -263,6 +297,7 @@ public:
 //////////////////////////////////////////////////////////////////////////////
 // generate
 //////////////////////////////////////////////////////////////////////////////
+#include <boost/fusion/include/for_each.hpp>
 #include <boost/fusion/include/map.hpp>
 #include <boost/utility/enable_if.hpp>
 
@@ -279,7 +314,7 @@ namespace generate_detail {
     struct call_listener {
         Environment& env_;
         template <typename Listener>
-        void operator()(Listener const& listener) {
+        void operator()(Listener const& listener) const {
             listener(convertible_if_matches<Event>(), env_);
         }
     };
@@ -288,19 +323,89 @@ namespace generate_detail {
 /*!
  *
  */
-template <typename Event, typename Listener, typename Environment>
-void generate(Listener const& listener, Environment const& env) {
+template <typename Event, typename Environment>
+void generate(Environment const& env) {
     generate_detail::call_listener<Event, Environment const> call = {env};
-    call(listener);
+    typedef typename domain_of<Event>::type Domain;
+    boost::fusion::for_each(Domain::static_listeners(), call);
+    // boost::for_each(Domain::dynamic_listeners, call); // not ready yet
 }
 
 /*!
  *
  */
-template <typename Event, typename Listener>
-void generate(Listener const& listener) {
-    generate<Event>(listener, boost::fusion::map<>());
+template <typename Event>
+void generate() {
+    generate<Event>(boost::fusion::map<>());
 }
 } // end namespace dyno
+
+
+
+//////////////////////////////////////////////////////////////////////////////
+// Domain concept
+//////////////////////////////////////////////////////////////////////////////
+namespace dyno {
+/*!
+ * Specification of the `Domain` concept.
+ *
+ * A domain regroups listeners interested into being notified when any event
+ * from a set of events is triggered.
+ *
+ *
+ * ## Notation
+ * | Expression | Description
+ * | ---------- | -----------
+ * | `D`        | A type modeling the `Domain` concept
+ *
+ *
+ * ## Valid expressions
+ * | Expression              | Return type                                                        | Semantics
+ * | ----------              | -----------                                                        | ---------
+ * | `D::static_listeners()` | A Boost.Fusion `Sequence` of types modeling the `Listener` concept | Returns the set of listeners that were registered to that domain at compile-time.
+ *
+ *
+ * @tparam D
+ *         The type to be tested for modeling of the `Domain` concept.
+ */
+template <typename D>
+struct Domain;
+} // end namespace dyno
+
+
+
+//////////////////////////////////////////////////////////////////////////////
+// domain default implementation
+//////////////////////////////////////////////////////////////////////////////
+#include <boost/fusion/include/vector.hpp>
+
+namespace dyno {
+/*!
+ *
+ */
+template <typename ...Listeners>
+struct domain {
+    static boost::fusion::vector<Listeners&...> static_listeners() {
+        return boost::fusion::vector<Listeners&...>(
+                                        instance_of<Listeners>()...);
+    }
+};
+} // end namespace dyno
+
+
+
+
+/*!
+ * @section Tutorial
+ * 1. define events
+ * 2. instrument your code (mixins, wrappers, raw calls to generate or other means)
+ * 3. implement your listener, i.e. what will you do on those events
+ *
+ *
+ * 4. define what domain(s) of events your listener is subscribed to
+ *    your listener will be called whenever any event from those domains
+ *    is generated.
+ *    ^^^^^^^^^^^^^^^^ domains are useless (make sure of it) ^^^^^^^^^^^^^
+ */
 
 #endif // !DYNO_CONCEPTS_HPP

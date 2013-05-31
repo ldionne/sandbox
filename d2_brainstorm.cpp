@@ -52,10 +52,6 @@ struct call_member_fn<R T::*, mfp> {
 
 
 namespace d2 {
-    struct goodlock_analysis;
-    extern goodlock_analysis D2_FRAMEWORK;
-
-
     //////////////////////////////////////////////////////////////////////////
     // access.hpp
     //////////////////////////////////////////////////////////////////////////
@@ -95,7 +91,9 @@ namespace d2 {
     struct recursive;
 
 
-    template <typename ...Characteristics> struct mutex_operation { };
+    struct mutex_event_domain;
+    template <typename ...Characteristics>
+    struct mutex_operation { typedef mutex_event_domain dyno_domain; };
     // characteristics of all operations on mutexes:
     template <typename> struct synchronization_object;
     template <typename> struct previous_ownership;
@@ -119,9 +117,7 @@ namespace d2 {
                         new_ownership<exclusive>,
                         synchronization_object<Derived>
                     >
-                >(D2_FRAMEWORK, (
-                    dyno::key<dyno::env::_this>() = &this->facade()
-                ));
+                >(dyno::key<dyno::env::_this>() = &this->facade());
             }
 
             void unlock() {
@@ -132,9 +128,7 @@ namespace d2 {
                         new_ownership<none>,
                         synchronization_object<Derived>
                     >
-                >(D2_FRAMEWORK, (
-                    dyno::key<dyno::env::_this>() = &this->facade()
-                ));
+                >(dyno::key<dyno::env::_this>() = &this->facade());
             }
         };
     };
@@ -201,9 +195,13 @@ namespace d2 {
     struct thread;
     struct process; // don't think about this right now
 
-    template <typename Level> struct start { };   // semantics: current segment must complete before the two new segments can begin (fork semantics)
-    template <typename Level> struct join { };    // semantics: current segment waits for the two other segments to complete
-    template <typename Level> struct detach { };  // semantics: segment still running but no one will wait for it to complete before the end of the execution
+    struct thread_sync_domain;
+    // semantics: current segment must complete before the two new segments can begin (fork semantics)
+    template <typename Level> struct start { typedef thread_sync_domain dyno_domain; };
+    // semantics: current segment waits for the two other segments to complete
+    template <typename Level> struct join { typedef thread_sync_domain dyno_domain; };
+    // semantics: segment still running but no one will wait for it to complete before the end of the execution
+    template <typename Level> struct detach { typedef thread_sync_domain dyno_domain; };
 
 
     //////////////////////////////////////////////////////////////////////////
@@ -217,7 +215,7 @@ namespace d2 {
             explicit apply(F&& f, Args&& ...args)
                 // Here, we would wrap the thread function
                 : Next([&] {
-                    return dyno::generate<start<parallelism_level<thread> > >(D2_FRAMEWORK),
+                    return dyno::generate<start<parallelism_level<thread> > >(),
                            void(), // bypass any `operator,` overload
                            std::forward<F>(f)(std::forward<Args>(args)...);
                 })
@@ -229,18 +227,14 @@ namespace d2 {
                 JoinImplementation()(this->facade());
                 dyno::generate<
                     d2::join<parallelism_level<thread> >
-                >(D2_FRAMEWORK, (
-                    dyno::key<dyno::env::_this>() = &this->facade()
-                ));
+                >(dyno::key<dyno::env::_this>() = &this->facade());
             }
 
             void detach() {
                 DetachImplementation()(this->facade());
                 dyno::generate<
                     d2::detach<parallelism_level<thread> >
-                >(D2_FRAMEWORK, (
-                    dyno::key<dyno::env::_this>() = &this->facade()
-                ));
+                >(dyno::key<dyno::env::_this>() = &this->facade());
             }
         };
     };
@@ -388,7 +382,13 @@ namespace d2 {
         }
     };
 
-    goodlock_analysis D2_FRAMEWORK;
+    struct mutex_event_domain
+        : dyno::domain<goodlock_analysis>
+    { };
+
+    struct thread_sync_domain
+        : dyno::domain<goodlock_analysis>
+    { };
 } // end namespace d2
 
 // clang++ -I /usr/lib/c++/v1 -ftemplate-backtrace-limit=0 -I /usr/local/include -stdlib=libc++ -std=c++11 -I ~/code/dyno/include -Wall -Wextra -pedantic ~/code/sandbox/d2_brainstorm.cpp -o/dev/null
