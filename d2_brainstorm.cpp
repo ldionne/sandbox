@@ -1,5 +1,5 @@
 
-#include "dyno_concepts.hpp"
+#include "dyno_v3.hpp"
 #include <atomic>
 #include <boost/fusion/include/as_map.hpp>
 #include <boost/fusion/include/map.hpp>
@@ -22,60 +22,7 @@
 #include <utility>
 
 
-#define RETURNS(...) -> decltype(__VA_ARGS__) { return __VA_ARGS__; }
-
-// clang3.2 does not have inheriting constructors
-#define INHERIT_CONSTRUCTORS(Type, Base)                                    \
-    template <typename ...Args>                                             \
-    Type(Args&& ...args) : Base(std::forward<Args>(args)...) { }            \
-/**/
-
-template <typename MemberFunctionPointer, MemberFunctionPointer mfp>
-struct call_member_fn;
-
-template <typename R, typename T, R T::*mfp>
-struct call_member_fn<R T::*, mfp> {
-    template <typename ...Args>
-    auto operator()(T& t, Args&& ...args) const RETURNS(
-        (t.*mfp)(std::forward<Args>(args)...)
-    )
-
-    template <typename ...Args>
-    auto operator()(T const& t, Args&& ...args) const RETURNS(
-        (t.*mfp)(std::forward<Args>(args)...)
-    )
-
-    template <typename ...Args>
-    auto operator()(T&& t, Args&& ...args) const RETURNS(
-        (std::move(t).*mfp)(std::forward<Args>(args)...)
-    )
-};
-
-
 namespace d2 {
-    //////////////////////////////////////////////////////////////////////////
-    // access.hpp
-    //////////////////////////////////////////////////////////////////////////
-    class access {
-#define D2_I_ACCESS_USE(METHOD_NAME)                                        \
-        struct use_ ## METHOD_NAME {                                        \
-            template <typename T, typename ...Args>                         \
-            auto operator()(T&& t, Args&& ...args) const RETURNS(           \
-                std::forward<T>(t).METHOD_NAME(std::forward<Args>(args)...) \
-            )                                                               \
-        };                                                                  \
-    /**/
-
-    public:
-        D2_I_ACCESS_USE(lock_impl)
-        D2_I_ACCESS_USE(unlock_impl)
-        D2_I_ACCESS_USE(try_lock_impl)
-        D2_I_ACCESS_USE(join_impl)
-        D2_I_ACCESS_USE(detach_impl)
-#undef D2_I_ACCESS_USE
-    };
-
-
     //////////////////////////////////////////////////////////////////////////
     // mutex_events.hpp
     //////////////////////////////////////////////////////////////////////////
@@ -287,69 +234,3 @@ int main() {
     wrap.unlock();
     wrap.try_lock();
 }
-
-
-#if 0
-namespace d2 {
-    // SharedLockable
-    typedef mutex_operation<
-        previous_ownership<none>, new_ownership<shared>, synchronization_object<_1>
-    > lock_shared;
-
-    typedef mutex_operation<
-        previous_ownership<shared>, new_ownership<none>, synchronization_object<_1>
-    > unlock_shared;
-
-    // UpgradeLockable
-    typedef mutex_operation<
-        previous_ownership<none>, new_ownership<upgradable>, synchronization_object<_1>
-    > lock_upgrade;
-
-    typedef mutex_operation<
-        previous_ownership<upgradable>, new_ownership<none>, synchronization_object<_1>
-    > unlock_upgrade;
-
-    typedef mutex_operation<
-        previous_ownership<shared>, new_ownership<exclusive>, synchronization_object<_1>
-    > unlock_shared_and_lock;
-
-    typedef mutex_operation<
-        previous_ownership<exclusive>, new_ownership<shared>, synchronization_object<_1>
-    > unlock_and_lock_shared;
-
-    typedef mutex_operation<
-        previous_ownership<shared>, new_ownership<upgradable>, synchronization_object<_1>
-    > unlock_shared_and_lock_upgrade;
-
-    typedef mutex_operation<
-        previous_ownership<exclusive>, new_ownership<upgradable>, synchronization_object<_1>
-    > unlock_and_lock_upgrade;
-
-    typedef mutex_operation<
-        previous_ownership<upgradable>, new_ownership<exclusive>, synchronization_object<_1>
-    > unlock_upgrade_and_lock;
-
-    typedef mutex_operation<
-        previous_ownership<upgradable>, new_ownership<shared>, synchronization_object<_1>
-    > unlock_upgrade_and_lock_shared;
-} // end namespace operations
-
-#endif
-
-
-template <typename Framework>
-struct type_erased_event_base {
-    virtual void call(Framework&) = 0;
-};
-
-template <typename Event, typename Environment, typename Framework>
-struct type_erased_event : type_erased_event_base<Framework> {
-    explicit type_erased_event(Environment& env) : env_(env) { }
-
-    virtual void call(Framework& framework) {
-        framework(Event(), env_);
-    }
-
-private:
-    Environment& env_;
-};

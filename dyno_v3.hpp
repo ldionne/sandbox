@@ -1,6 +1,6 @@
 
-#ifndef DYNO_CONCEPTS_HPP
-#define DYNO_CONCEPTS_HPP
+#ifndef SANDBOX_DYNO_V3_HPP
+#define SANDBOX_DYNO_V3_HPP
 
 //////////////////////////////////////////////////////////////////////////////
 // DYNO_INHERIT_CONSTRUCTORS macro for portability
@@ -270,4 +270,4 @@ namespace dyno {
  *    ^^^^^^^^^^^^^^^^ domains are useless (make sure of it) ^^^^^^^^^^^^^
  */
 
-#endif // !DYNO_CONCEPTS_HPP
+#endif // !SANDBOX_DYNO_V3_HPP
