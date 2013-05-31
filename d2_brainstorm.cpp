@@ -104,91 +104,6 @@ namespace d2 {
 
 
     //////////////////////////////////////////////////////////////////////////
-    // basic_lockable.hpp
-    //////////////////////////////////////////////////////////////////////////
-    template <typename LockImplementation, typename UnlockImplementation>
-    struct track_lock_unlock {
-        template <typename Derived, typename Next>
-        struct apply : Next {
-            INHERIT_CONSTRUCTORS(apply, Next)
-
-            void lock() {
-                LockImplementation()(this->facade());
-                dyno::generate<
-                    mutex_operation<
-                        previous_ownership<none>,
-                        new_ownership<exclusive>,
-                        synchronization_object<Derived>
-                    >
-                >(dyno::key<dyno::env::_this>() = &this->facade());
-            }
-
-            void unlock() {
-                UnlockImplementation()(this->facade());
-                dyno::generate<
-                    mutex_operation<
-                        previous_ownership<exclusive>,
-                        new_ownership<none>,
-                        synchronization_object<Derived>
-                    >
-                >(dyno::key<dyno::env::_this>() = &this->facade());
-            }
-        };
-    };
-
-    template <typename Derived, typename ...Trackers>
-    using basic_lockable_mixin =
-        dyno::spy_as_mixin<
-            Derived,
-            track_lock_unlock<access::use_lock_impl, access::use_unlock_impl>,
-            Trackers...
-        >;
-
-    template <typename BasicLockable, typename ...Trackers>
-    using basic_lockable_wrapper =
-        dyno::spy_as_wrapper<
-            BasicLockable,
-            track_lock_unlock<
-                call_member_fn<decltype(&BasicLockable::lock), &BasicLockable::lock>,
-                call_member_fn<decltype(&BasicLockable::unlock), &BasicLockable::unlock>
-            >,
-            Trackers...
-        >;
-
-
-    //////////////////////////////////////////////////////////////////////////
-    // lockable.hpp
-    //////////////////////////////////////////////////////////////////////////
-    template <typename TryLockImplementation>
-    struct track_try_lock {
-        template <typename Derived, typename Next>
-        struct apply : Next {
-            INHERIT_CONSTRUCTORS(apply, Next)
-
-            bool try_lock() noexcept {
-                return TryLockImplementation()(this->facade());
-            }
-        };
-    };
-
-    template <typename Derived, typename ...Trackers>
-    using lockable_mixin =
-        basic_lockable_mixin<
-            Derived,
-            track_try_lock<access::use_try_lock_impl>,
-            Trackers...
-        >;
-
-    template <typename Lockable, typename ...Trackers>
-    using lockable_wrapper =
-        basic_lockable_wrapper<
-            Lockable,
-            track_try_lock<call_member_fn<decltype(&Lockable::try_lock), &Lockable::try_lock> >,
-            Trackers...
-        >;
-
-
-    //////////////////////////////////////////////////////////////////////////
     // code_segment_events.hpp (find better name)
     //////////////////////////////////////////////////////////////////////////
     template <typename ...Characteristics> struct code_segment;
@@ -208,86 +123,9 @@ namespace d2 {
 
 
     //////////////////////////////////////////////////////////////////////////
-    // std_thread.hpp
-    //////////////////////////////////////////////////////////////////////////
-    template <typename JoinImplementation, typename DetachImplementation>
-    struct track_start_join_detach {
-        template <typename Derived, typename Next>
-        struct apply : Next {
-            template <typename F, typename ...Args>
-            explicit apply(F&& f, Args&& ...args)
-                : Next([=] { // need to copy everything because it will be run in a new thread
-                    return dyno::generate<start<parallelism_level<thread> > >(),
-                           void(), // bypass any `operator,` overload
-                           std::move(f)(std::move(args)...);
-                })
-            { }
-
-            using Next::operator=;
-
-            void join() {
-                JoinImplementation()(this->facade());
-                dyno::generate<
-                    d2::join<parallelism_level<thread> >
-                >(dyno::key<dyno::env::_this>() = &this->facade());
-            }
-
-            void detach() {
-                DetachImplementation()(this->facade());
-                dyno::generate<
-                    d2::detach<parallelism_level<thread> >
-                >(dyno::key<dyno::env::_this>() = &this->facade());
-            }
-        };
-    };
-
-    template <typename Derived, typename ...Trackers>
-    using std_thread_mixin =
-        dyno::spy_as_mixin<
-            Derived,
-            track_start_join_detach<access::use_join_impl, access::use_detach_impl>,
-            Trackers...
-        >;
-
-    template <typename Thread, typename ...Trackers>
-    using std_thread_wrapper =
-        dyno::spy_as_wrapper<
-            Thread,
-            track_start_join_detach<
-                call_member_fn<decltype(&Thread::join), &Thread::join>,
-                call_member_fn<decltype(&Thread::detach), &Thread::detach>
-            >,
-            Trackers...
-        >;
-
-
-    //////////////////////////////////////////////////////////////////////////
     // build_lock_graph.hpp
     //////////////////////////////////////////////////////////////////////////
     struct build_lock_graph {
-        static unsigned long get_new_id() {
-            static std::atomic<unsigned long> lock_id;
-            return lock_id++;
-        }
-
-        template <typename Int>
-        struct get_new_id_on_construction {
-            get_new_id_on_construction() : value_(get_new_id()) { }
-            operator Int() const { return value_; }
-            Int value_;
-        };
-
-        template <typename SynchronizationObject, typename Next, typename Enable = void>
-        struct tracker : Next { };
-
-        template <typename SynchronizationObject, typename Next>
-        struct tracker<SynchronizationObject, Next, typename boost::enable_if<
-            dyno::matches<mutex<dyno::_> , SynchronizationObject>
-        >::type> : Next
-        {
-            get_new_id_on_construction<unsigned long> lock_id;
-        };
-
         template <typename Environment>
         void operator()(mutex_operation<
                             previous_ownership<none>,
@@ -419,32 +257,35 @@ namespace d2 {
 // clang++ -I /usr/lib/c++/v1 -ftemplate-backtrace-limit=0 -I /usr/local/include -stdlib=libc++ -std=c++11 -I ~/code/dyno/include -Wall -Wextra -pedantic ~/code/sandbox/d2_brainstorm.cpp -o/dev/null
 // g++-4.8 -std=c++11 -ftemplate-backtrace-limit=0 -I /usr/local/include -Wall -Wextra -pedantic -I ~/code/dyno/include ~/code/sandbox/d2_brainstorm.cpp -o/dev/null
 
-struct MutexMixin : d2::lockable_mixin<MutexMixin> {
-    void lock_impl() { }
-    void unlock_impl() { }
-    bool try_lock_impl() { return true; }
+struct WrappedMutex : std::mutex {
+    void lock() {
+        std::mutex::lock();
+        dyno::generate<
+            d2::mutex_operation<
+                d2::previous_ownership<d2::none>,
+                d2::new_ownership<d2::exclusive>,
+                d2::synchronization_object<WrappedMutex>
+            >
+        >(dyno::key<dyno::env::_this>() = this);
+    }
+
+    void unlock() {
+        std::mutex::unlock();
+        dyno::generate<
+            d2::mutex_operation<
+                d2::previous_ownership<d2::exclusive>,
+                d2::new_ownership<d2::none>,
+                d2::synchronization_object<WrappedMutex>
+            >
+        >(dyno::key<dyno::env::_this>() = this);
+    }
 };
 
-typedef d2::lockable_wrapper<std::mutex> MutexWrapper;
-typedef d2::std_thread_wrapper<std::thread> Thread;
-
-
 int main() {
-    MutexMixin mix;
-    mix.lock();
-    mix.unlock();
-    mix.try_lock();
-
-    MutexWrapper wrap;
+    WrappedMutex wrap;
     wrap.lock();
     wrap.unlock();
     wrap.try_lock();
-
-    Thread t1([] {});
-    t1.join();
-
-    Thread t2([] {});
-    t2.detach();
 }
 
 
