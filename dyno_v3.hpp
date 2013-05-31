@@ -229,12 +229,38 @@ namespace generate_detail {
         operator Pattern() const { return Pattern(); }
     };
 
+    template <typename Sequence>
+    struct pointers_to
+        : boost::mpl::transform<
+            Sequence,
+            boost::add_pointer<boost::mpl::_1>,
+            boost::mpl::back_inserter<boost::mpl::vector<> >
+        >
+    { };
+
     template <typename Event, typename Environment>
-    struct call_listener {
-        Environment& env_;
+    struct call_final {
+        Environment& shared_env;
         template <typename Listener>
         void operator()(Listener*) {
-            instance_of<Listener>()(convertible_if_matches<Event>(), env_);
+            instance_of<Listener>()(convertible_if_matches<Event>(), shared_env);
+        }
+    };
+
+    template <typename Event, typename Environment>
+    struct call_listener {
+        Environment env_copy;
+        template <typename Listener>
+        void operator()(Listener*) {
+            typedef typename topological_ordering_of_dependencies_of<
+                Listener
+            >::type OrderedDependencies;
+
+            boost::mpl::for_each<
+                typename pointers_to<OrderedDependencies>::type
+            >(call_final<Event, Environment>{env_copy})
+
+            instance_of<Listener>()(convertible_if_matches<Event>(), env_copy);
         }
     };
 } // end namespace generate_detail
@@ -244,13 +270,12 @@ namespace generate_detail {
  */
 template <typename Event, typename Environment>
 void generate(Environment const& env) {
-    generate_detail::call_listener<Event, Environment const> call = {env};
     typedef typename domain_of<Event>::type Domain;
-    typedef typename boost::mpl::transform<
-        typename Domain::static_listeners,
-        boost::add_pointer<boost::mpl::_1>,
-        boost::mpl::back_inserter<boost::mpl::vector<> >
+    typedef typename generate_detail::pointers_to<
+        typename Domain::static_listeners
     >::type ListenersWithoutInstantiation;
+
+    generate_detail::call_listener<Event, Environment> call = {env};
     boost::mpl::for_each<ListenersWithoutInstantiation>(call);
 }
 
