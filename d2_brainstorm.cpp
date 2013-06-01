@@ -2,6 +2,7 @@
 #include "dyno_v3.hpp"
 #include <boost/config.hpp>
 #include <boost/graph/directed_graph.hpp>
+#include <boost/proto/proto.hpp>
 #include <dyno/model/easy_map.hpp>
 #include <iostream>
 #include <map>
@@ -23,23 +24,23 @@ namespace d2 {
 template <typename ...Characteristics> struct mutex;
 // characteristics of mutexes:
 template <typename> struct ownership; // how many threads can own the mutex at a time?
-struct none;
-struct shared;
-struct exclusive;
-struct upgradable; // this is functionally the same as shared, but only one thread may have it at a time and it is not possible for a thread to have it if a thread has exclusive ownership (and vice-versa)
+struct none { };
+struct shared { };
+struct exclusive { };
+struct upgradable{}; // this is functionally the same as shared, but only one thread may have it at a time and it is not possible for a thread to have it if a thread has exclusive ownership (and vice-versa)
 
-template <typename> struct recursiveness; // can the mutex be re-acquired by the same thread?
-struct non_recursive;
-struct recursive;
+template <typename> struct recursiveness{}; // can the mutex be re-acquired by the same thread?
+struct non_recursive{};
+struct recursive{};
 
 
 struct mutex_event_domain;
 template <typename ...Characteristics>
 struct mutex_operation { typedef mutex_event_domain dyno_domain; };
 // characteristics of all operations on mutexes:
-template <typename> struct synchronization_object;
-template <typename> struct previous_ownership;
-template <typename> struct new_ownership;
+template <typename> struct synchronization_object { };
+template <typename T> struct previous_ownership { };
+template <typename> struct new_ownership { };
 
 // the two types of operations currently supported by the d2 analysis
 template <typename Recursiveness>
@@ -162,6 +163,18 @@ D2_THREAD_LOCAL _recursive_lock_count::map_type _recursive_lock_count::counts_pe
 static const _recursive_lock_count recursive_lock_count{};
 
 namespace recursive_lock_count_detail {
+    // struct updater
+    //     : proto::or_<
+    //         proto::when_<acquire<recursive>,
+    //             proto::increment(_recursive_lock_count)
+    //         >,
+    //         proto::when_<release<recursive>,
+    //             proto::decrement(_recursive_lock_count)
+    //         >,
+    //         proto::otherwise<proto::nothing>
+    //     >
+    // { };
+
     struct updater {
         template <typename Environment>
         void operator()(acquire<recursive>, dyno::minimal_env<_recursive_lock_count>, Environment& env)
@@ -343,6 +356,9 @@ struct std_thread_wrapper : Thread {
 typedef std_thread_wrapper<std::thread> WrappedThread;
 typedef std_mutex_wrapper<std::mutex> WrappedMutex;
 
+template <typename Event>
+struct dyno_event : boost::proto::extends<Event, dyno_event<Event> > { };
+
 // clang++ -I /usr/lib/c++/v1 -ftemplate-backtrace-limit=0 -I /usr/local/include -stdlib=libc++ -std=c++11 -I ~/code/dyno/include -Wall -Wextra -pedantic ~/code/sandbox/d2_brainstorm.cpp -o d2_brainstorm.out && ./d2_brainstorm.out && rm d2_brainstorm.out
 // g++-4.8 -std=c++11 -ftemplate-backtrace-limit=0 -I /usr/local/include -Wall -Wextra -pedantic -I ~/code/dyno/include ~/code/sandbox/d2_brainstorm.cpp -o d2_brainstorm.out && ./d2_brainstorm.out && rm d2_brainstorm.out
 
@@ -354,4 +370,10 @@ int main() {
 
     WrappedThread t1([]{});
     t1.join();
+
+    using namespace boost;
+    BOOST_PROTO_ASSERT_MATCHES(
+        dyno_event<proto::literal<d2::previous_ownership<d2::none> > >(),
+        dyno_event<proto::literal<d2::previous_ownership<proto::_> > >
+    );
 }
