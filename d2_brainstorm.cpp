@@ -69,24 +69,24 @@ namespace d2 {
     //////////////////////////////////////////////////////////////////////////
     typedef unsigned long LockId;
     namespace env {
-        struct _lock_id
-            : dyno::env_var<dyno::externally_provided, LockId>
-        { };
+        struct _lock_id;
+        //     : dyno::env_var<dyno::externally_provided, LockId>
+        // { };
 
-        struct _gatelocks
-            : dyno::env_var<
-                dyno::thread_local_, std::set<LockId>
-            >
-        { };
+        struct _gatelocks;
+        //     : dyno::env_var<
+        //         dyno::thread_local_, std::set<LockId>
+        //     >
+        // { };
 
         // We must let dyno provide us all static data through the env,
         // because we don't know whether we're running live or whether
         // it is an emulation.
-        struct _recursive_lock_count
-            : dyno::env_var<
-                dyno::thread_local_, std::map<LockId, unsigned long>
-            >
-        { };
+        struct _recursive_lock_count;
+        //     : dyno::env_var<
+        //         dyno::thread_local_, std::map<LockId, unsigned long>
+        //     >
+        // { };
     }
 
     struct build_lock_graph {
@@ -95,11 +95,12 @@ namespace d2 {
     private:
         template <typename Environment>
         void process_acquire(Environment& env) {
+            #if 0
             // Whenever a lock is acquired, we add its lock_id to the gatelocks.
             using namespace boost::fusion;
             auto& gatelocks = at_key<d2::env::_gatelocks>(env);
             gatelocks.insert(at_key<d2::env::_lock_id>(env));
-
+            #endif
             #if 0
             auto mutex = boost::fusion::at_key<d2::env::_lock_id>(env);
             add_vertex(mutex, lock_graph);
@@ -118,9 +119,11 @@ namespace d2 {
         // Whenever a lock is released, we remove its lock_id from the gatelocks.
         template <typename Environment>
         void process_release(Environment& env) {
+            #if 0
             using namespace boost::fusion;
             auto& gatelocks = at_key<d2::env::_gatelocks>(env);
             gatelocks.erase(at_key<d2::env::_lock_id>(env));
+            #endif
         }
 
     public:
@@ -135,9 +138,13 @@ namespace d2 {
                                 > >
                             >
                         > >,
+                        dyno::minimal_env<
+                            // env::_gatelocks,
+                            env::_lock_id
+                        >,
                         Environment& env)
         {
-            std::cout << "mutex_operation<previous_ownership<none>, new_ownership<exclusive>, synchronization_object<mutex<ownership<exclusive>, recursiveness<non_recursive> > > >" << std::endl;
+            std::cout << "exclusive acquire non recursive mutex" << std::endl;
             process_acquire(env);
         }
 
@@ -152,9 +159,13 @@ namespace d2 {
                                 > >
                             >
                         > >,
+                        dyno::minimal_env<
+                            // env::_gatelocks,
+                            env::_lock_id
+                        >,
                         Environment& env)
         {
-            std::cout << "mutex_operation<previous_ownership<exclusive>, new_ownership<none>, synchronization_object<mutex<ownership<exclusive>, recursiveness<non_recursive> > > >" << std::endl;
+            std::cout << "release non recursive mutex" << std::endl;
             process_release(env);
         }
 
@@ -169,14 +180,21 @@ namespace d2 {
                                 > >
                             >
                         > >,
+                        dyno::minimal_env<
+                            env::_recursive_lock_count,
+                            env::_gatelocks,
+                            env::_lock_id
+                        >,
                         Environment& env)
         {
-            std::cout << "mutex_operation<previous_ownership<none>, new_ownership<exclusive>, synchronization_object<mutex<ownership<dyno::_>, recursiveness<recursive> > > >" << std::endl;
+            std::cout << "exclusive acquire recursive mutex" << std::endl;
+            #if 0
             using namespace boost::fusion;
             auto lock_id = at_key<d2::env::_lock_id>(env);
             auto& recursive_lock_count = at_key<d2::env::_recursive_lock_count>(env);
             if (recursive_lock_count[lock_id]++ == 0)
                 process_acquire(env);
+            #endif
         }
 
         template <typename Environment>
@@ -190,14 +208,21 @@ namespace d2 {
                                 > >
                             >
                         > >,
+                        dyno::minimal_env<
+                            env::_recursive_lock_count,
+                            env::_gatelocks,
+                            env::_lock_id
+                        >,
                         Environment& env)
         {
-            std::cout << "mutex_operation<previous_ownership<exclusive>, new_ownership<none>, synchronization_object<mutex<ownership<dyno::_>, recursiveness<recursive> > > > >" << std::endl;
+            std::cout << "release recursive mutex" << std::endl;
+            #if 0
             using namespace boost::fusion;
             auto lock_id = at_key<d2::env::_lock_id>(env);
             auto& recursive_lock_count = at_key<d2::env::_recursive_lock_count>(env);
             if (--recursive_lock_count[lock_id] == 0)
                 process_release(env);
+            #endif
         }
     };
 
@@ -264,9 +289,6 @@ namespace d2 {
     { };
 } // end namespace d2
 
-// clang++ -I /usr/lib/c++/v1 -ftemplate-backtrace-limit=0 -I /usr/local/include -stdlib=libc++ -std=c++11 -I ~/code/dyno/include -Wall -Wextra -pedantic ~/code/sandbox/d2_brainstorm.cpp -o d2_brainstorm.out && ./d2_brainstorm.out && rm d2_brainstorm.out
-// g++-4.8 -std=c++11 -ftemplate-backtrace-limit=0 -I /usr/local/include -Wall -Wextra -pedantic -I ~/code/dyno/include ~/code/sandbox/d2_brainstorm.cpp -o d2_brainstorm.out && ./d2_brainstorm.out && rm d2_brainstorm.out
-
 
 // Wrapper over a std::mutex (or any other mutex with the same interface and semantics)
 template <typename Mutex>
@@ -319,6 +341,8 @@ struct std_thread_wrapper : Thread {
 typedef std_thread_wrapper<std::thread> WrappedThread;
 typedef std_mutex_wrapper<std::mutex> WrappedMutex;
 
+// clang++ -I /usr/lib/c++/v1 -ftemplate-backtrace-limit=0 -I /usr/local/include -stdlib=libc++ -std=c++11 -I ~/code/dyno/include -Wall -Wextra -pedantic ~/code/sandbox/d2_brainstorm.cpp -o d2_brainstorm.out && ./d2_brainstorm.out && rm d2_brainstorm.out
+// g++-4.8 -std=c++11 -ftemplate-backtrace-limit=0 -I /usr/local/include -Wall -Wextra -pedantic -I ~/code/dyno/include ~/code/sandbox/d2_brainstorm.cpp -o d2_brainstorm.out && ./d2_brainstorm.out && rm d2_brainstorm.out
 
 int main() {
     WrappedMutex wrap;

@@ -93,17 +93,19 @@ namespace dyno {
  * one of the domains it is a member of.
  *
  * The first parameter must be a model of the `Event` concept. Pattern
- * matching may be used when declaring the parameter. That pattern is
- * what must be matched by an `Event` in order for this overload of
- * `operator()` to be picked. When an event is generated, __dyno__ will
- * call the overload with a first parameter that `matches` the event that
- * was generated. See `matches` for more information on patterns.
+ * matching may be used when declaring the parameter. That pattern must
+ * be matched by an `Event` in order for this overload of `operator()` to
+ * be picked. See `matches` for more information on patterns.
  *
- * The second parameter is an unspecified type modeling the Boost.Fusion
+ * The second parameter must be a Boost.MPL `Sequence` of types representing
+ * the minimal set of keys that must be present in the environment in order
+ * for this overload to be picked.
+ *
+ * The third parameter is an unspecified type modeling the Boost.Fusion
  * `AssociativeSequence` concept. When the listener is called, this will
  * be a compile-time map containing all of the environment variables
  * accessible to the listener. This environment is shared by all the
- * listeners of the domain.
+ * listeners of a domain.
  *
  *
  * ## Notation
@@ -111,15 +113,16 @@ namespace dyno {
  * | ----------    | -----------
  * | `L`           | A type modeling the `Listener` concept
  * | `listener`    | An instance of type `L`
- * | `E`           | A type convertible to any type matching some model of the `Event` concept
+ * | `Event`       | A type convertible to any type matching some model of the `Event` concept
+ * | `MinimalKeys` | A type convertible to any `Sequence` whose elements are all keys in the `Environment`
  * | `Environment` | A type modeling the Boost.Fusion `AssociativeSequence` concept
  * | `env`         | An instance of type `Environment`
  *
  *
  * ## Valid expressions
- * | Expression           | Return type | Semantics
- * | ----------           | ----------- | ---------
- * | `listener(E(), env)` | `void`      | Perform the action matched by `E`.
+ * | Expression                              | Return type | Semantics
+ * | ----------                              | ----------- | ---------
+ * | `listener(Event(), MinimalKeys(), env)` | `void`      | Notify the listener that an event has occured.
  *
  *
  * @tparam L
@@ -296,41 +299,98 @@ struct _args;
 
 
 //////////////////////////////////////////////////////////////////////////////
+// minimal_env
+//////////////////////////////////////////////////////////////////////////////
+#include <boost/mpl/vector.hpp>
+
+namespace dyno {
+    template <typename ...Keys>
+    using minimal_env = boost::mpl::vector<Keys...>;
+}
+
+
+
+//////////////////////////////////////////////////////////////////////////////
 // generate
 //////////////////////////////////////////////////////////////////////////////
+#include <boost/fusion/include/has_key.hpp>
 #include <boost/fusion/include/map.hpp>
+#include <boost/fusion/include/mpl.hpp>
+#include <boost/mpl/apply.hpp>
 #include <boost/mpl/back_inserter.hpp>
+#include <boost/mpl/bool.hpp>
+#include <boost/mpl/copy_if.hpp>
 #include <boost/mpl/for_each.hpp>
+#include <boost/mpl/lambda.hpp>
 #include <boost/mpl/placeholders.hpp>
 #include <boost/mpl/transform.hpp>
 #include <boost/mpl/vector.hpp>
 #include <boost/type_traits/add_pointer.hpp>
 #include <boost/utility/enable_if.hpp>
+#include <dyno/detail/mpl_extensions.hpp>
+#include <utility>
 
 namespace dyno {
 namespace generate_detail {
-    template <typename Event>
-    struct convertible_if_matches {
-        template <typename Pattern, typename =
-            typename boost::enable_if<matches<Event, Pattern> >::type>
-        operator Pattern() const { return Pattern(); }
+    namespace fsn = boost::fusion;
+    namespace mpl = boost::mpl;
+
+    template <typename Condition>
+    struct convertible_if {
+        template <typename T, typename = typename boost::enable_if<
+            typename mpl::apply<typename mpl::lambda<Condition>::type, T>::type
+        >::type>
+        operator T() const { return T(); }
     };
+
+    template <typename Listener, typename Event, typename Environment, typename Key>
+    class uses_key {
+        template <typename K>
+        static mpl::true_ test(decltype(
+            std::declval<Listener>()(
+                convertible_if<matches<Event, mpl::_1> >(),
+                convertible_if<fsn::result_of::has_key<mpl::_1, K> >(),
+                std::declval<Environment>()
+        ))*);
+
+        template <typename K> static mpl::false_ test(...);
+
+    public:
+        typedef decltype(test<Key>(0)) type;
+    };
+
+    // For optimization purposes, it might be interesting to know what is
+    // the subset of the environment that is actually used by the listener.
+    template <typename Listener, typename Event, typename Environment>
+    struct deduce_used_keys
+        : mpl::copy_if<
+            typename mpl::keys<Environment>::type,
+            uses_key<Listener, Event, Environment, mpl::_1>
+        >
+    { };
 
     template <typename Sequence>
     struct pointers_to
-        : boost::mpl::transform<
+        : mpl::transform<
             Sequence,
-            boost::add_pointer<boost::mpl::_1>,
-            boost::mpl::back_inserter<boost::mpl::vector<> >
+            boost::add_pointer<mpl::_1>,
+            mpl::back_inserter<mpl::vector<> >
         >
     { };
 
     template <typename Event, typename Environment>
     struct call_listener {
+        typedef typename mpl::lambda<
+            fsn::result_of::has_key<Environment, mpl::_1>
+        >::type EnvironmentHasKey;
+
         Environment& shared_env;
         template <typename Listener>
         void operator()(Listener*) {
-            instance_of<Listener>()(convertible_if_matches<Event>(), shared_env);
+            instance_of<Listener>()(
+                convertible_if<matches<Event, mpl::_1> >(),
+                convertible_if<mpl::all_of<mpl::_1, EnvironmentHasKey> >(),
+                shared_env);
         }
     };
 } // end namespace generate_detail
