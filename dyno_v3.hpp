@@ -3,6 +3,135 @@
 #define SANDBOX_DYNO_V3_HPP
 
 //////////////////////////////////////////////////////////////////////////////
+// Event concept
+//////////////////////////////////////////////////////////////////////////////
+namespace dyno {
+/*!
+ * Specification of the `Event` concept.
+ *
+ * An event is a type carrying information about something that happens
+ * in a program. The sole purpose of an event is to serve as a type tag
+ * to find the right overload when calling a `Listener`.
+ *
+ * Related events are categorized into `Domain`s. When creating a new _family_
+ * of events, it is a good idea to create a new domain for those events.
+ * Events are aware of their domain, but the converse is not true.
+ *
+ *
+ * ## Notation
+ * | Expression | Description
+ * | ---------- | -----------
+ * | `E`        | A type modeling the `Event` concept
+ * | `Pattern`  | Any type
+ *
+ *
+ * ## Valid expressions
+ * In addition to be `DefaultConstructible` and `CopyConstructible`, the
+ * following expressions must be valid and have the described semantics.
+ *
+ * | Expression                  | Return type                      | Semantics
+ * | ----------                  | -----------                      | ---------
+ * | `matches<E, Pattern>::type` | See `matches`                    | See `matches`
+ * | `domain_of<E>::type`        | A model of the `Domain` concept  | Returns the domain categorizing `E`.
+ *
+ *
+ * @tparam E
+ *         The type to be tested for modeling of the `Event` concept.
+ */
+template <typename E>
+struct Event;
+} // end namespace dyno
+
+
+
+//////////////////////////////////////////////////////////////////////////////
+// Domain concept
+//////////////////////////////////////////////////////////////////////////////
+namespace dyno {
+/*!
+ * Specification of the `Domain` concept.
+ *
+ * Conceptually, a domain regroups the listeners to notify when any event
+ * from a set of events is triggered.
+ *
+ * All domains have a super-domain whose events are more general. Members of
+ * a domain are also automatically members of all the sub-domains of that
+ * domain. The most general domain is `root_domain` and it is its own
+ * super-domain.
+ *
+ *
+ * ## Notation
+ * | Expression | Description
+ * | ---------- | -----------
+ * | `D`        | A type modeling the `Domain` concept
+ *
+ *
+ * ## Valid expressions
+ * | Expression            | Return type                                                     | Semantics
+ * | ----------            | -----------                                                     | ---------
+ * | `D::static_listeners` | A Boost.MPL `Sequence` of types modeling the `Listener` concept | Returns the set of listeners that were registered to that domain or its super-domain at compile-time.
+ * | `D::super_domain`     | A type modeling the `Domain` concept                            | Returns the super-domain of a domain.
+ *
+ *
+ * @tparam D
+ *         The type to be tested for modeling of the `Domain` concept.
+ */
+template <typename D>
+struct Domain;
+} // end namespace dyno
+
+
+
+//////////////////////////////////////////////////////////////////////////////
+// Listener concept
+//////////////////////////////////////////////////////////////////////////////
+namespace dyno {
+/*!
+ * Specification of the `Listener` concept.
+ *
+ * A listener is a function object called whenever an event is generated in
+ * one of the domains it is a member of.
+ *
+ * The first parameter must be a model of the `Event` concept. Pattern
+ * matching may be used when declaring the parameter. That pattern is
+ * what must be matched by an `Event` in order for this overload of
+ * `operator()` to be picked. When an event is generated, __dyno__ will
+ * call the overload with a first parameter that `matches` the event that
+ * was generated. See `matches` for more information on patterns.
+ *
+ * The second parameter is an unspecified type modeling the Boost.Fusion
+ * `AssociativeSequence` concept. When the listener is called, this will
+ * be a compile-time map containing all of the environment variables
+ * accessible to the listener. This environment is shared by all the
+ * listeners of the domain.
+ *
+ *
+ * ## Notation
+ * | Expression    | Description
+ * | ----------    | -----------
+ * | `L`           | A type modeling the `Listener` concept
+ * | `listener`    | An instance of type `L`
+ * | `E`           | A type convertible to any type matching some model of the `Event` concept
+ * | `Environment` | A type modeling the Boost.Fusion `AssociativeSequence` concept
+ * | `env`         | An instance of type `Environment`
+ *
+ *
+ * ## Valid expressions
+ * | Expression           | Return type | Semantics
+ * | ----------           | ----------- | ---------
+ * | `listener(E(), env)` | `void`      | Perform the action matched by `E`.
+ *
+ *
+ * @tparam L
+ *         The type to be tested for modeling of the `Listener` concept.
+ */
+template <typename L>
+struct Listener;
+} // end namespace dyno
+
+
+
+//////////////////////////////////////////////////////////////////////////////
 // DYNO_INHERIT_CONSTRUCTORS macro for portability
 //////////////////////////////////////////////////////////////////////////////
 #include <boost/move/utility.hpp>
@@ -148,48 +277,6 @@ namespace dyno {
 
 
 //////////////////////////////////////////////////////////////////////////////
-// Event concept
-//////////////////////////////////////////////////////////////////////////////
-namespace dyno {
-/*!
- * Specification of the `Event` concept.
- *
- * An event is a type carrying information about something that happens
- * in a program. The sole purpose of an event is to serve as a type tag
- * to find the right overload when calling a `Listener`.
- *
- * Related events are categorized into `Domain`s. When creating a new _family_
- * of events, it is a good idea to create a new domain for those events.
- * Events are aware of their domain, but the converse is not true.
- *
- *
- * ## Notation
- * | Expression | Description
- * | ---------- | -----------
- * | `E`        | A type modeling the `Event` concept
- * | `Pattern`  | Any type
- *
- *
- * ## Valid expressions
- * In addition to be `DefaultConstructible` and `CopyConstructible`, the
- * following expressions must be valid and have the described semantics.
- *
- * | Expression                  | Return type                      | Semantics
- * | ----------                  | -----------                      | ---------
- * | `matches<E, Pattern>::type` | See `matches`                    | See `matches`
- * | `domain_of<E>::type`        | A model of the `Domain` concept  | Returns the domain categorizing `E`.
- *
- *
- * @tparam E
- *         The type to be tested for modeling of the `Event` concept.
- */
-template <typename E>
-struct Event;
-} // end namespace dyno
-
-
-
-//////////////////////////////////////////////////////////////////////////////
 // predefined environment variables
 //////////////////////////////////////////////////////////////////////////////
 namespace dyno { namespace env {
@@ -269,93 +356,6 @@ template <typename Event>
 void generate() {
     generate<Event>(boost::fusion::map<>());
 }
-} // end namespace dyno
-
-
-
-//////////////////////////////////////////////////////////////////////////////
-// Domain concept
-//////////////////////////////////////////////////////////////////////////////
-namespace dyno {
-/*!
- * Specification of the `Domain` concept.
- *
- * Conceptually, a domain regroups the listeners to notify when any event
- * from a set of events is triggered.
- *
- * All domains have a super-domain whose events are more general. Members of
- * a domain are also automatically members of all the sub-domains of that
- * domain. The most general domain is `root_domain` and it is its own
- * super-domain.
- *
- *
- * ## Notation
- * | Expression | Description
- * | ---------- | -----------
- * | `D`        | A type modeling the `Domain` concept
- *
- *
- * ## Valid expressions
- * | Expression            | Return type                                                     | Semantics
- * | ----------            | -----------                                                     | ---------
- * | `D::static_listeners` | A Boost.MPL `Sequence` of types modeling the `Listener` concept | Returns the set of listeners that were registered to that domain or its super-domain at compile-time.
- * | `D::super_domain`     | A type modeling the `Domain` concept                            | Returns the super-domain of a domain.
- *
- *
- * @tparam D
- *         The type to be tested for modeling of the `Domain` concept.
- */
-template <typename D>
-struct Domain;
-} // end namespace dyno
-
-
-
-//////////////////////////////////////////////////////////////////////////////
-// Listener concept
-//////////////////////////////////////////////////////////////////////////////
-namespace dyno {
-/*!
- * Specification of the `Listener` concept.
- *
- * A listener is a function object called whenever an event is generated in
- * one of the domains it is a member of.
- *
- * The first parameter must be a model of the `Event` concept. Pattern
- * matching may be used when declaring the parameter. That pattern is
- * what must be matched by an `Event` in order for this overload of
- * `operator()` to be picked. When an event is generated, __dyno__ will
- * call the overload with a first parameter that `matches` the event that
- * was generated. See `matches` for more information on patterns.
- *
- * The second parameter is an unspecified type modeling the Boost.Fusion
- * `AssociativeSequence` concept. When the listener is called, this will
- * be a compile-time map containing all of the environment variables
- * accessible to the listener. This environment is shared by all the
- * listeners of the domain.
- *
- *
- * ## Notation
- * | Expression    | Description
- * | ----------    | -----------
- * | `L`           | A type modeling the `Listener` concept
- * | `listener`    | An instance of type `L`
- * | `E`           | A type convertible to any type matching some model of the `Event` concept
- * | `Environment` | A type modeling the Boost.Fusion `AssociativeSequence` concept
- * | `env`         | An instance of type `Environment`
- *
- *
- * ## Valid expressions
- * | Expression           | Return type | Semantics
- * | ----------           | ----------- | ---------
- * | `listener(E(), env)` | `void`      | Perform the action matched by `E`.
- *
- *
- * @tparam L
- *         The type to be tested for modeling of the `Listener` concept.
- */
-template <typename L>
-struct Listener;
 } // end namespace dyno
 
 

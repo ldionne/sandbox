@@ -1,5 +1,6 @@
 
 #include "dyno_v3.hpp"
+#include <boost/config.hpp>
 #include <boost/fusion/include/at_key.hpp>
 #include <boost/fusion/include/has_key.hpp>
 #include <boost/graph/directed_graph.hpp>
@@ -14,6 +15,11 @@
 
 
 namespace d2 {
+#ifdef BOOST_CLANG
+#   define D2_THREAD_LOCAL __thread
+#else
+#   define D2_THREAD_LOCAL thread_local
+#endif
     //////////////////////////////////////////////////////////////////////////
     // mutex_events.hpp
     //////////////////////////////////////////////////////////////////////////
@@ -61,27 +67,60 @@ namespace d2 {
     //////////////////////////////////////////////////////////////////////////
     // build_lock_graph.hpp
     //////////////////////////////////////////////////////////////////////////
+    typedef unsigned long LockId;
     namespace env {
-        struct _gatelocks;
-        struct _lock_id;
+        struct _lock_id
+            : dyno::env_var<dyno::externally_provided, LockId>
+        { };
+
+        struct _gatelocks
+            : dyno::env_var<
+                dyno::thread_local_, std::set<LockId>
+            >
+        { };
+
+        // We must let dyno provide us all static data through the env,
+        // because we don't know whether we're running live or whether
+        // it is an emulation.
+        struct _recursive_lock_count
+            : dyno::env_var<
+                dyno::thread_local_, std::map<LockId, unsigned long>
+            >
+        { };
     }
 
     struct build_lock_graph {
         boost::directed_graph<> lock_graph;
 
     private:
-        // Whenever a lock is acquired, we add its lock_id to the gatelocks.
         template <typename Environment>
-        static void update_gatelocks_on_acquire(Environment& env) {
-            auto& held_locks = boost::fusion::at_key<d2::env::_gatelocks>(env);
-            held_locks.insert(boost::fusion::at_key<d2::env::_lock_id>(env));
+        void process_acquire(Environment& env) {
+            // Whenever a lock is acquired, we add its lock_id to the gatelocks.
+            using namespace boost::fusion;
+            auto& gatelocks = at_key<d2::env::_gatelocks>(env);
+            gatelocks.insert(at_key<d2::env::_lock_id>(env));
+
+            #if 0
+            auto mutex = boost::fusion::at_key<d2::env::_lock_id>(env);
+            add_vertex(mutex, lock_graph);
+            for (auto gatelock: gatelocks) {
+                // TODO: If the code location of this acquire and that of the
+                //       other acquire making `mutex` and `gatelock` adjacent
+                //       are different, then we would like to record this acquire
+                //       because it is not redundant to do so.
+                if (!is_adjacent(mutex, gatelock, lock_graph))
+                    // we might want to tag the edge with the whole environment
+                    add_edge(gatelock, mutex, lock_graph);
+            }
+            #endif
         }
 
         // Whenever a lock is released, we remove its lock_id from the gatelocks.
         template <typename Environment>
-        static void update_gatelocks_on_release(Environment& env) {
-            auto& held_locks = boost::fusion::at_key<d2::env::_gatelocks>(env);
-            held_locks.erase(boost::fusion::at_key<d2::env::_lock_id>(env));
+        void process_release(Environment& env) {
+            using namespace boost::fusion;
+            auto& gatelocks = at_key<d2::env::_gatelocks>(env);
+            gatelocks.erase(at_key<d2::env::_lock_id>(env));
         }
 
     public:
@@ -96,24 +135,10 @@ namespace d2 {
                                 > >
                             >
                         > >,
-                        Environment&) const
+                        Environment& env)
         {
             std::cout << "mutex_operation<previous_ownership<none>, new_ownership<exclusive>, synchronization_object<mutex<ownership<exclusive>, recursiveness<non_recursive> > > >" << std::endl;
-            #if 0
-            update_gatelocks_on_acquire(env);
-
-            auto mutex = env[tags::mutex_id];
-            add_vertex(mutex, lock_graph);
-            for (auto gatelock: env[tags::gatelocks]) {
-                // TODO: If the code location of this acquire and that of the
-                //       other acquire making `mutex` and `gatelock` adjacent
-                //       are different, then we would like to record this acquire
-                //       because it is not redundant to do so.
-                if (!is_adjacent(mutex, gatelock, lock_graph))
-                    // we might want to tag the edge with the whole environment
-                    add_edge(gatelock, mutex, lock_graph);
-            }
-            #endif
+            process_acquire(env);
         }
 
         template <typename Environment>
@@ -127,12 +152,10 @@ namespace d2 {
                                 > >
                             >
                         > >,
-                        Environment const&) const
+                        Environment& env)
         {
             std::cout << "mutex_operation<previous_ownership<exclusive>, new_ownership<none>, synchronization_object<mutex<ownership<exclusive>, recursiveness<non_recursive> > > >" << std::endl;
-            #if 0
-            update_gatelocks_on_release(env);
-            #endif
+            process_release(env);
         }
 
         template <typename Environment>
@@ -146,13 +169,14 @@ namespace d2 {
                                 > >
                             >
                         > >,
-                        Environment const&) const
+                        Environment& env)
         {
             std::cout << "mutex_operation<previous_ownership<none>, new_ownership<exclusive>, synchronization_object<mutex<ownership<dyno::_>, recursiveness<recursive> > > >" << std::endl;
-            #if 0
-            if (env[tags::recursive_lock_count]++)
-                operator()(mutex_operation<previous_ownership<none>, new_ownership<exclusive>, synchronization_object<_> >(), env);
-            #endif
+            using namespace boost::fusion;
+            auto lock_id = at_key<d2::env::_lock_id>(env);
+            auto& recursive_lock_count = at_key<d2::env::_recursive_lock_count>(env);
+            if (recursive_lock_count[lock_id]++ == 0)
+                process_acquire(env);
         }
 
         template <typename Environment>
@@ -166,13 +190,14 @@ namespace d2 {
                                 > >
                             >
                         > >,
-                        Environment const&) const
+                        Environment& env)
         {
             std::cout << "mutex_operation<previous_ownership<exclusive>, new_ownership<none>, synchronization_object<mutex<ownership<dyno::_>, recursiveness<recursive> > > > >" << std::endl;
-            #if 0
-            if (--env[tags::recursive_lock_count] == 0)
-                operator()(mutex_operation<previous_ownership<exclusive>, new_ownership<none>, synchronization_object<_> >(), env);
-            #endif
+            using namespace boost::fusion;
+            auto lock_id = at_key<d2::env::_lock_id>(env);
+            auto& recursive_lock_count = at_key<d2::env::_recursive_lock_count>(env);
+            if (--recursive_lock_count[lock_id] == 0)
+                process_release(env);
         }
     };
 
@@ -263,7 +288,6 @@ public:
             >
         >((
             dyno::key<dyno::env::_this>() = this,
-            dyno::key<d2::env::_gatelocks>() = 1,
             dyno::key<d2::env::_lock_id>() = 2
         ));
     }
@@ -278,7 +302,6 @@ public:
             >
         >((
             dyno::key<dyno::env::_this>() = this,
-            dyno::key<d2::env::_gatelocks>() = 1,
             dyno::key<d2::env::_lock_id>() = 2
         ));
     }
