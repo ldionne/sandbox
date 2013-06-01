@@ -135,6 +135,123 @@ struct Listener;
 
 
 //////////////////////////////////////////////////////////////////////////////
+// Environment concept
+//////////////////////////////////////////////////////////////////////////////
+namespace dyno {
+/*!
+ * Specification of the `Environment` concept.
+ *
+ * An environment ...
+ *
+ *
+ * ## Notation
+ * | Expression | Description
+ * | ---------- | -----------
+ * | `Env`      | A type modeling the `Environment` concept
+ * | `env`      | An instance of type `Env`
+ * | `ext`      | An arbitrary instance of a model of the Boost.Fusion `AssociativeSequence` concept
+ * | `var`      | An instance of a type modeling the `EnvironmentVariable` concept
+ *
+ *
+ * ## Valid expressions
+ * | Expression        | Return type                                               | Semantics
+ * | ----------        | -----------                                               | ---------
+ * | `Env env(ext)`    |                                                           | Create an environment whose `externals()` method returns an `AssociativeSequence` with the same content as `ext`.
+ * | `env[var]`        | Any type                                                  | `Var::get(env)`, where `Var` is the type of `var`.
+ * | `env.externals()` | A model of the Boost.Fusion `AssociativeSequence` concept | Returns the set of `(key, value)` pairs with which the environment was initially created.
+ *
+ *
+ * @tparam Env
+ *         The type to be tested for modeling of the `Environment` concept.
+ */
+template <typename Env>
+struct Environment;
+} // end namespace dyno
+
+
+
+//////////////////////////////////////////////////////////////////////////////
+// EnvironmentVariable concept
+//////////////////////////////////////////////////////////////////////////////
+namespace dyno {
+/*!
+ * Specification of the `EnvironmentVariable` concept.
+ *
+ * An environment variable ...
+ *
+ *
+ * ## Notation
+ * | Expression | Description
+ * | ---------- | -----------
+ * | `Var`      | A type modeling the `EnvironmentVariable` concept
+ * | `Env`      | A type modeling the `Environment` concept
+ * | `env`      | An instance of type `Env`
+ *
+ *
+ * ## Valid expressions
+ * | Expression          | Return type | Semantics
+ * | ----------          | ----------- | ---------
+ * | `Var::get(env)`     | Any type    | Retrieve the value associated to `Var` in `env`.
+ *
+ *
+ * @tparam Var
+ *         The type to be tested for modeling of the `EnvironmentVariable`
+ *         concept.
+ */
+template <typename Var>
+struct EnvironmentVariable;
+} // end namespace dyno
+
+
+
+//////////////////////////////////////////////////////////////////////////////
+// environment
+//////////////////////////////////////////////////////////////////////////////
+#include <utility>
+
+namespace dyno {
+template <typename Externals>
+struct environment {
+    explicit environment(Externals const& ext) : externals_(ext) { }
+    explicit environment(Externals&& ext) : externals_(std::move(ext)) { }
+
+    template <typename Var>
+    decltype(Var::get(std::declval<environment>())) operator[](Var)
+    { return Var::get(*this); }
+
+    template <typename Var>
+    decltype(Var::get(std::declval<environment const>())) operator[](Var) const
+    { return Var::get(*this); }
+
+    Externals const& externals() const
+    { return externals_; }
+
+private:
+    Externals const externals_;
+};
+} // end namespace dyno
+
+
+
+//////////////////////////////////////////////////////////////////////////////
+// external_env_var
+//////////////////////////////////////////////////////////////////////////////
+#include <boost/fusion/include/at_key.hpp>
+
+namespace dyno {
+    template <typename Key>
+    struct external_env_var {
+        template <typename Environment>
+        static auto get(Environment& env)
+        -> decltype(boost::fusion::at_key<Key>(env.externals())) {
+            return boost::fusion::at_key<Key>(env.externals());
+        }
+    };
+} // end namespace dyno
+
+
+
+//////////////////////////////////////////////////////////////////////////////
 // DYNO_INHERIT_CONSTRUCTORS macro for portability
 //////////////////////////////////////////////////////////////////////////////
 #include <boost/move/utility.hpp>
@@ -188,14 +305,14 @@ struct matches<Node<Children1...>, Node<Children2...> >
 { };
 
 //! Matches anything.
-struct _;
+struct _ { };
 template <typename T>
 struct matches<T, _>
     : boost::mpl::true_
 { };
 
 //! Matches if any of the patterns match.
-template <typename ...> struct or_;
+template <typename ...> struct or_ { };
 template <typename T, typename ...Patterns>
 struct matches<T, or_<Patterns...> >
     : boost::mpl::any_of<
@@ -205,7 +322,7 @@ struct matches<T, or_<Patterns...> >
 { };
 
 //! Matches if all of the patterns match.
-template <typename ...> struct and_;
+template <typename ...> struct and_ { };
 template <typename T, typename ...Patterns>
 struct matches<T, and_<Patterns...> >
     : boost::mpl::all_of<
@@ -215,7 +332,7 @@ struct matches<T, and_<Patterns...> >
 { };
 
 //! Matches iff the pattern does not match.
-template <typename> struct not_;
+template <typename> struct not_ { };
 template <typename T, typename Pattern>
 struct matches<T, not_<Pattern> >
     : boost::mpl::not_<matches<T, Pattern> >
@@ -284,16 +401,16 @@ namespace dyno {
 //////////////////////////////////////////////////////////////////////////////
 namespace dyno { namespace env {
 /*!
- * Key to an optional environment variable containing the `this` pointer of
- * the object that triggered the current event.
+ * Environment variable containing the `this` pointer of the object that
+ * triggered the current event.
  */
-struct _this;
+struct _this : external_env_var<_this> { };
 
 /*!
- * Key to an optional environment variable containing the arguments passed
- * to the function that triggered the current event as a tuple.
+ * Environment variable containing the arguments passed to the function that
+ * triggered the current event as a tuple.
  */
-struct _args;
+struct _args : external_env_var<_args> { };
 }} // end namespace dyno::env
 
 
@@ -313,19 +430,25 @@ namespace dyno {
 //////////////////////////////////////////////////////////////////////////////
 // generate
 //////////////////////////////////////////////////////////////////////////////
+#include <boost/fusion/include/as_map.hpp>
+#include <boost/fusion/include/fold.hpp>
 #include <boost/fusion/include/has_key.hpp>
 #include <boost/fusion/include/map.hpp>
 #include <boost/fusion/include/mpl.hpp>
+#include <boost/mpl/always.hpp>
 #include <boost/mpl/apply.hpp>
 #include <boost/mpl/back_inserter.hpp>
 #include <boost/mpl/bool.hpp>
+#include <boost/mpl/contains.hpp>
 #include <boost/mpl/copy_if.hpp>
 #include <boost/mpl/for_each.hpp>
+#include <boost/mpl/joint_view.hpp>
 #include <boost/mpl/lambda.hpp>
 #include <boost/mpl/placeholders.hpp>
 #include <boost/mpl/transform.hpp>
 #include <boost/mpl/vector.hpp>
 #include <boost/type_traits/add_pointer.hpp>
+#include <boost/type_traits/remove_reference.hpp>
 #include <boost/utility/enable_if.hpp>
 #include <dyno/detail/mpl_extensions.hpp>
 #include <utility>
@@ -343,31 +466,21 @@ namespace generate_detail {
         operator T() const { return T(); }
     };
 
-    template <typename Listener, typename Event, typename Environment, typename Key>
-    class uses_key {
+    template <typename Listener, typename Event, typename Var>
+    class uses_env_var {
         template <typename K>
         static mpl::true_ test(decltype(
             std::declval<Listener>()(
                 convertible_if<matches<Event, mpl::_1> >(),
-                convertible_if<fsn::result_of::has_key<mpl::_1, K> >(),
-                std::declval<Environment>()
+                convertible_if<mpl::contains<mpl::_1, K> >(),
+                convertible_if<mpl::always<mpl::true_> >()
         ))*);
 
         template <typename K> static mpl::false_ test(...);
 
     public:
-        typedef decltype(test<Key>(0)) type;
+        typedef decltype(test<Var>(0)) type;
     };
-
-    // For optimization purposes, it might be interesting to know what is
-    // the subset of the environment that is actually used by the listener.
-    template <typename Listener, typename Event, typename Environment>
-    struct deduce_used_keys
-        : mpl::copy_if<
-            typename mpl::keys<Environment>::type,
-            uses_key<Listener, Event, Environment, mpl::_1>
-        >
-    { };
 
     template <typename Sequence>
     struct pointers_to
@@ -378,19 +491,42 @@ namespace generate_detail {
         >
     { };
 
-    template <typename Event, typename Environment>
-    struct call_listener {
-        typedef typename mpl::lambda<
-            fsn::result_of::has_key<Environment, mpl::_1>
-        >::type EnvironmentHasKey;
+    struct push_back_env_var {
+        template <typename Sig> struct result;
 
+        template <typename This, typename Environment, typename Var>
+        struct result<This(Environment&, Var)>
+            : fsn::result_of::as_map<
+                typename fsn::result_of::push_back<
+                    Environment,
+                    typename fsn::result_of::make_pair<
+                        Var, typename Var::type
+                    >::type
+                >::type
+            >
+        { };
+
+        template <typename Environment, typename Var>
+        typename result<push_back_env_var(Environment&, Var)>::type
+        operator()(Environment& env, Var) const {
+            return fsn::as_map(fsn::push_back(env, fsn::make_pair<Var>(Var::retrieve_from(env))));
+        }
+    };
+
+    template <typename Event, typename Environment>
+    struct trigger_listener {
         Environment& shared_env;
+
         template <typename Listener>
         void operator()(Listener*) {
+            typedef typename mpl::lambda<
+                fsn::result_of::has_key<Environment, mpl::_1>
+            >::type EnvironmentHasKey;
+
             instance_of<Listener>()(
                 convertible_if<matches<Event, mpl::_1> >(),
                 convertible_if<mpl::all_of<mpl::_1, EnvironmentHasKey> >(),
-                shared_env);
+                augmented_env);
         }
     };
 } // end namespace generate_detail
@@ -398,15 +534,20 @@ namespace generate_detail {
 /*!
  *
  */
-template <typename Event, typename Environment>
-void generate(Environment env) {
+template <typename Event, typename Externals>
+void generate(Externals&& ext) {
     typedef typename domain_of<Event>::type Domain;
     typedef typename generate_detail::pointers_to<
         typename Domain::static_listeners
     >::type ListenersWithoutInstantiation;
 
-    generate_detail::call_listener<Event, Environment> call = {env};
-    boost::mpl::for_each<ListenersWithoutInstantiation>(call);
+    typedef environment<
+        typename boost::remove_reference<Externals>::type
+    > Environment;
+
+    Environment env(std::forward<Externals>(ext));
+    generate_detail::trigger_listener<Event, Environment> trigger = {env};
+    boost::mpl::for_each<ListenersWithoutInstantiation>(trigger);
 }
 
 /*!
