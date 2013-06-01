@@ -1,14 +1,10 @@
 
 #include "dyno_v3.hpp"
 #include <boost/config.hpp>
-#include <boost/fusion/include/at_key.hpp>
-#include <boost/fusion/include/has_key.hpp>
-#include <boost/fusion/include/make_map.hpp>
 #include <boost/graph/directed_graph.hpp>
-#include <boost/mpl/assert.hpp>
-#include <boost/mpl/vector.hpp>
 #include <dyno/model/easy_map.hpp>
 #include <iostream>
+#include <map>
 #include <mutex>
 #include <set>
 #include <thread>
@@ -105,15 +101,10 @@ template <typename Level> struct detach { typedef thread_sync_domain dyno_domain
 //////////////////////////////////////////////////////////////////////////
 // lock_id.hpp
 //////////////////////////////////////////////////////////////////////////
+typedef unsigned long LockId;
 namespace env {
-    struct _lock_id {
-        typedef unsigned long type;
-
-        template <typename Environment>
-        static type retrieve_from(Environment& env) {
-            return boost::fusion::at_key<_lock_id>(env);
-        }
-    };
+    struct _lock_id : dyno::external_env_var<_lock_id> { };
+    static const _lock_id lock_id{};
 }
 
 
@@ -122,33 +113,33 @@ namespace env {
 // gatelocks.hpp
 //////////////////////////////////////////////////////////////////////////
 namespace env {
-    struct _gatelocks {
-        typedef boost::mpl::vector<_lock_id, _gatelocks> environment_variables;
-        typedef std::set<_lock_id::type> type;
+struct _gatelocks {
+    template <typename Environment>
+    static std::set<LockId>& get(Environment const&) {
+        return single_instance_per_thread;
+    }
 
-        template <typename Environment>
-        static type& retrieve_from(Environment const&) {
-            return single_instance_per_thread;
-        }
+private:
+    static D2_THREAD_LOCAL std::set<LockId> single_instance_per_thread;
+};
+D2_THREAD_LOCAL std::set<LockId> _gatelocks::single_instance_per_thread;
+static const _gatelocks gatelocks{};
 
+namespace gatelocks_detail {
+    struct updater {
         // Whenever a lock is acquired, we add its lock_id to the gatelocks.
         template <typename Environment>
         void operator()(acquire<dyno::_>, dyno::minimal_env<_lock_id, _gatelocks>, Environment& env) {
-            auto& gatelocks = boost::fusion::at_key<_gatelocks>(env);
-            gatelocks.insert(boost::fusion::at_key<_lock_id>(env));
+            env[gatelocks].insert(env[lock_id]);
         }
 
         // Whenever a lock is released, we remove its lock_id from the gatelocks.
         template <typename Environment>
         void operator()(release<dyno::_>, dyno::minimal_env<_lock_id, _gatelocks>, Environment& env) {
-            auto& gatelocks = boost::fusion::at_key<_gatelocks>(env);
-            gatelocks.erase(boost::fusion::at_key<_lock_id>(env));
+            env[gatelocks].erase(env[lock_id]);
         }
-
-    private:
-        static D2_THREAD_LOCAL type single_instance_per_thread;
     };
-    D2_THREAD_LOCAL _gatelocks::type _gatelocks::single_instance_per_thread;
+}
 } // end namespace env
 
 
@@ -157,33 +148,33 @@ namespace env {
 // recursive_lock_count.hpp
 //////////////////////////////////////////////////////////////////////////
 namespace env {
-    struct _recursive_lock_count {
-        typedef boost::mpl::vector<_lock_id, _recursive_lock_count> environment_variables;
-        typedef unsigned long type;
+struct _recursive_lock_count {
+    template <typename Environment>
+    static unsigned long& get(Environment& env) {
+        return counts_per_thread[env[lock_id]];
+    }
+
+private:
+    typedef std::map<LockId, unsigned long> map_type;
+    static D2_THREAD_LOCAL map_type counts_per_thread;
+};
+D2_THREAD_LOCAL _recursive_lock_count::map_type _recursive_lock_count::counts_per_thread;
+static const _recursive_lock_count recursive_lock_count{};
+
+namespace recursive_lock_count_detail {
+    struct updater {
+        template <typename Environment>
+        void operator()(acquire<recursive>, dyno::minimal_env<_recursive_lock_count>, Environment& env)
+        { ++env[recursive_lock_count]; }
 
         template <typename Environment>
-        static type& retrieve_from(Environment& env) {
-            return counts_per_thread[boost::fusion::at_key<_lock_id>(env)];
-        }
-
-        template <typename Environment>
-        void operator()(acquire<recursive>, dyno::minimal_env<_recursive_lock_count>, Environment& env) {
-            ++boost::fusion::at_key<_recursive_lock_count>(env);
-        }
-
-        template <typename Environment>
-        void operator()(release<recursive>, dyno::minimal_env<_recursive_lock_count>, Environment& env) {
-            --boost::fusion::at_key<_recursive_lock_count>(env);
-        }
+        void operator()(release<recursive>, dyno::minimal_env<_recursive_lock_count>, Environment& env)
+        { --env[recursive_lock_count]; }
 
         template <typename Environment>
         void operator()(dyno::or_<release<non_recursive>, acquire<non_recursive> >, dyno::minimal_env<>, Environment const&) { }
-
-    private:
-        typedef std::map<_lock_id::type, type> map_type;
-        static D2_THREAD_LOCAL map_type counts_per_thread;
     };
-    D2_THREAD_LOCAL _recursive_lock_count::map_type _recursive_lock_count::counts_per_thread;
+}
 } // end namespace env
 
 
@@ -192,10 +183,6 @@ namespace env {
 // build_lock_graph.hpp
 //////////////////////////////////////////////////////////////////////////
 struct build_lock_graph {
-    typedef boost::mpl::vector<
-        env::_lock_id, env::_gatelocks, env::_recursive_lock_count
-    > environment_variables;
-
     boost::directed_graph<> lock_graph;
 
 public:
@@ -205,11 +192,10 @@ public:
                     Environment& env)
     {
         std::cout << "exclusive acquire non recursive mutex" << std::endl;
-        auto const& gatelocks = boost::fusion::at_key<d2::env::_gatelocks>(env);
-        auto mutex = boost::fusion::at_key<d2::env::_lock_id>(env);
+        auto mutex = env[d2::env::lock_id];
         (void)mutex;
         // add_vertex(mutex, lock_graph);
-        for (auto gatelock: gatelocks) {
+        for (auto gatelock: env[d2::env::gatelocks]) {
             std::cout << "holding: " << gatelock << "\n";
             /*
             // TODO: If the code location of this acquire and that of the
@@ -227,9 +213,7 @@ public:
     void operator()(release<non_recursive>,
                     dyno::minimal_env<>,
                     Environment&)
-    {
-        std::cout << "release non recursive mutex" << std::endl;
-    }
+    { std::cout << "release non recursive mutex" << std::endl; }
 
     template <typename Environment>
     void operator()(acquire<recursive>,
@@ -237,7 +221,7 @@ public:
                     Environment& env)
     {
         // If this is the first time we're locking it, continue.
-        if (boost::fusion::at_key<d2::env::_recursive_lock_count>(env) == 1)
+        if (env[d2::env::recursive_lock_count] == 1)
             std::cout << "exclusive acquire recursive mutex" << std::endl;
     }
 
@@ -247,7 +231,7 @@ public:
                     Environment& env)
     {
         // If the mutex is not locked anymore after this unlock, continue.
-        if (boost::fusion::at_key<d2::env::_recursive_lock_count>(env) == 0)
+        if (env[d2::env::recursive_lock_count] == 0)
             std::cout << "release recursive mutex" << std::endl;
     }
 };
@@ -258,37 +242,17 @@ public:
 // build_segmentation_graph.hpp
 //////////////////////////////////////////////////////////////////////////
 struct build_segmentation_graph {
-    boost::directed_graph<> segmentation_graph;
-
     template <typename Environment>
     void operator()(start<parallelism_level<thread> >, Environment const&) const
-    {
-        std::cout << "start<parallelism_level<thread> >" << std::endl;
-        #if 0
-        add_vertex(env[tags::new_parent_segment], segmentation_graph);
-        add_vertex(env[tags::child_segment], segmentation_graph);
-        add_edge(env[tags::parent_segment], env[tags::new_parent_segment], segmentation_graph);
-        add_edge(env[tags::parent_segment], env[tags::child_segment], segmentation_graph);
-        env[tags::parent_segment] = env[tags::new_parent_segment];
-        #endif
-    }
+    { std::cout << "start<parallelism_level<thread> >" << std::endl; }
 
     template <typename Environment>
     void operator()(join<parallelism_level<thread> >, Environment const&) const
-    {
-        std::cout << "join<parallelism_level<thread> >" << std::endl;
-        #if 0
-        add_vertex(env[tags::new_parent_segment], segmentation_graph);
-        add_edge(env[tags::parent_segment], env[tags::new_parent_segment], segmentation_graph);
-        add_edge(env[tags::child_segment], env[tags::new_parent_segment], segmentation_graph);
-        #endif
-    }
+    { std::cout << "join<parallelism_level<thread> >" << std::endl; }
 
     template <typename Environment>
     void operator()(detach<parallelism_level<thread> >, Environment const&) const
-    {
-        std::cout << "detach<parallelism_level<thread> >" << std::endl;
-    }
+    { std::cout << "detach<parallelism_level<thread> >" << std::endl; }
 };
 
 
@@ -314,7 +278,12 @@ struct goodlock_analysis : build_lock_graph, build_segmentation_graph {
 };
 
 struct mutex_event_domain
-    : dyno::domain<dyno::root_domain, env::_recursive_lock_count, env::_gatelocks, goodlock_analysis>
+    : dyno::domain<
+        dyno::root_domain,
+        env::recursive_lock_count_detail::updater,
+        env::gatelocks_detail::updater,
+        goodlock_analysis
+    >
 { };
 
 struct thread_sync_domain
@@ -342,9 +311,8 @@ public:
                 d2::synchronization_object<DescriptionOfSemantics>
             >
         >((
-            boost::fusion::make_map<
-                dyno::env::_this, d2::env::_lock_id
-            >(this, 2u)
+            dyno::key<dyno::env::_this>() = this,
+            dyno::key<d2::env::_lock_id>() = 2u
         ));
     }
 
@@ -357,9 +325,8 @@ public:
                 d2::synchronization_object<DescriptionOfSemantics>
             >
         >((
-            boost::fusion::make_map<
-                dyno::env::_this, d2::env::_lock_id
-            >(this, 2u)
+            dyno::key<dyno::env::_this>() = this,
+            dyno::key<d2::env::_lock_id>() = 2u
         ));
     }
 };

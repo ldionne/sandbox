@@ -98,14 +98,13 @@ namespace dyno {
  * be picked. See `matches` for more information on patterns.
  *
  * The second parameter must be a Boost.MPL `Sequence` of types representing
- * the minimal set of keys that must be present in the environment in order
- * for this overload to be picked.
+ * the minimal set of environment variables that must be present in the
+ * environment in order for this overload to be picked.
  *
- * The third parameter is an unspecified type modeling the Boost.Fusion
- * `AssociativeSequence` concept. When the listener is called, this will
- * be a compile-time map containing all of the environment variables
- * accessible to the listener. This environment is shared by all the
- * listeners of a domain.
+ * The third parameter is an unspecified type modeling the `Environment`
+ * concept. When the listener is called, this will contain all of the
+ * environment variables accessible to the listener. This environment
+ * is shared by all the listeners of a domain.
  *
  *
  * ## Notation
@@ -114,15 +113,15 @@ namespace dyno {
  * | `L`           | A type modeling the `Listener` concept
  * | `listener`    | An instance of type `L`
  * | `Event`       | A type convertible to any type matching some model of the `Event` concept
- * | `MinimalKeys` | A type convertible to any `Sequence` whose elements are all keys in the `Environment`
- * | `Environment` | A type modeling the Boost.Fusion `AssociativeSequence` concept
- * | `env`         | An instance of type `Environment`
+ * | `MinimalVars` | A type convertible to any `Sequence` whose elements are all variables in `Env`
+ * | `Env`         | A type modeling the `Environment` concept
+ * | `env`         | An instance of type `Env`
  *
  *
  * ## Valid expressions
  * | Expression                              | Return type | Semantics
  * | ----------                              | ----------- | ---------
- * | `listener(Event(), MinimalKeys(), env)` | `void`      | Notify the listener that an event has occured.
+ * | `listener(Event(), MinimalVars(), env)` | `void`      | Notify the listener that an event has occured.
  *
  *
  * @tparam L
@@ -430,19 +429,12 @@ namespace dyno {
 //////////////////////////////////////////////////////////////////////////////
 // generate
 //////////////////////////////////////////////////////////////////////////////
-#include <boost/fusion/include/as_map.hpp>
-#include <boost/fusion/include/fold.hpp>
-#include <boost/fusion/include/has_key.hpp>
 #include <boost/fusion/include/map.hpp>
-#include <boost/fusion/include/mpl.hpp>
 #include <boost/mpl/always.hpp>
 #include <boost/mpl/apply.hpp>
 #include <boost/mpl/back_inserter.hpp>
 #include <boost/mpl/bool.hpp>
-#include <boost/mpl/contains.hpp>
-#include <boost/mpl/copy_if.hpp>
 #include <boost/mpl/for_each.hpp>
-#include <boost/mpl/joint_view.hpp>
 #include <boost/mpl/lambda.hpp>
 #include <boost/mpl/placeholders.hpp>
 #include <boost/mpl/transform.hpp>
@@ -450,36 +442,18 @@ namespace dyno {
 #include <boost/type_traits/add_pointer.hpp>
 #include <boost/type_traits/remove_reference.hpp>
 #include <boost/utility/enable_if.hpp>
-#include <dyno/detail/mpl_extensions.hpp>
 #include <utility>
 
 namespace dyno {
 namespace generate_detail {
-    namespace fsn = boost::fusion;
     namespace mpl = boost::mpl;
 
     template <typename Condition>
     struct convertible_if {
         template <typename T, typename = typename boost::enable_if<
-            typename mpl::apply<typename mpl::lambda<Condition>::type, T>::type
+            typename mpl::apply<typename mpl::lambda<Condition>::type,T>::type
         >::type>
         operator T() const { return T(); }
-    };
-
-    template <typename Listener, typename Event, typename Var>
-    class uses_env_var {
-        template <typename K>
-        static mpl::true_ test(decltype(
-            std::declval<Listener>()(
-                convertible_if<matches<Event, mpl::_1> >(),
-                convertible_if<mpl::contains<mpl::_1, K> >(),
-                convertible_if<mpl::always<mpl::true_> >()
-        ))*);
-
-        template <typename K> static mpl::false_ test(...);
-
-    public:
-        typedef decltype(test<Var>(0)) type;
     };
 
     template <typename Sequence>
@@ -491,42 +465,16 @@ namespace generate_detail {
         >
     { };
 
-    struct push_back_env_var {
-        template <typename Sig> struct result;
-
-        template <typename This, typename Environment, typename Var>
-        struct result<This(Environment&, Var)>
-            : fsn::result_of::as_map<
-                typename fsn::result_of::push_back<
-                    Environment,
-                    typename fsn::result_of::make_pair<
-                        Var, typename Var::type
-                    >::type
-                >::type
-            >
-        { };
-
-        template <typename Environment, typename Var>
-        typename result<push_back_env_var(Environment&, Var)>::type
-        operator()(Environment& env, Var) const {
-            return fsn::as_map(fsn::push_back(env, fsn::make_pair<Var>(Var::retrieve_from(env))));
-        }
-    };
-
     template <typename Event, typename Environment>
     struct trigger_listener {
         Environment& shared_env;
 
         template <typename Listener>
         void operator()(Listener*) {
-            typedef typename mpl::lambda<
-                fsn::result_of::has_key<Environment, mpl::_1>
-            >::type EnvironmentHasKey;
-
             instance_of<Listener>()(
                 convertible_if<matches<Event, mpl::_1> >(),
-                convertible_if<mpl::all_of<mpl::_1, EnvironmentHasKey> >(),
-                augmented_env);
+                convertible_if<mpl::always<mpl::true_> >(),
+                shared_env);
         }
     };
 } // end namespace generate_detail
