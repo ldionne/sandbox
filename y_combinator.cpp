@@ -1,5 +1,5 @@
 
-// clang++ -std=c++1y -stdlib=libc++ -Wall -Wextra -pedantic ~/desktop/workbench.cpp -I ~/code/libcxx/include -o /dev/null
+// clang++ -std=c++1y -stdlib=libc++ -Wall -Wextra -pedantic ~/code/sandbox/y_combinator.cpp -I ~/code/libcxx/include -o /dev/null
 // g++-4.9 -std=c++11 -Wall -Wextra -pedantic ~/desktop/workbench.cpp -o /dev/null
 
 
