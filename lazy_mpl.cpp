@@ -180,6 +180,11 @@ namespace lazy_mpl {
 
 
     // Folds
+    template <typename F>
+    struct tail_recurse {
+        using next = F;
+    };
+
     template <typename F, typename State, typename Seq, bool = is_empty<Seq>::type::value>
     struct strict_foldl_impl {
         using type = typename State::type;
@@ -192,7 +197,9 @@ namespace lazy_mpl {
         using xxx = typename apply<F, State, head<Seq>>::type;
 
     public:
-        using next = strict_foldl_impl<F, apply<F, State, head<Seq>>, tail<Seq>>;
+        using next = typename tail_recurse<
+            strict_foldl_impl<F, apply<F, State, head<Seq>>, tail<Seq>>
+        >::next;
     };
 
     template <typename F, typename State, typename Seq>
@@ -203,17 +210,25 @@ namespace lazy_mpl {
     };
 
 
+    template <typename X>
+    struct bottom_tail_recurse {
+        using next = bottom_tail_recurse;
+        using type = X;
+    };
 
     template <typename F, typename State, typename Seq, bool = is_empty<Seq>::type::value>
-    struct foldl_impl {
-        using type = typename State::type;
-        using next = foldl_impl;
-    };
+    struct foldl_impl
+        : bottom_tail_recurse<
+            typename State::type
+        >
+    { };
 
     template <typename F, typename State, typename Seq>
-    struct foldl_impl<F, State, Seq, false> {
-        using next = foldl_impl<F, apply<F, State, head<Seq>>, tail<Seq>>;
-    };
+    struct foldl_impl<F, State, Seq, false>
+        : tail_recurse<
+            foldl_impl<F, apply<F, State, head<Seq>>, tail<Seq>>
+        >
+    { };
 
     template <typename F, typename State, typename Seq>
     struct foldl {
@@ -267,7 +282,7 @@ namespace strict_mpl {
 
     template <typename Condition, typename Then, typename Else>
     struct if_
-        : if_c<Condition::type::value, Then, Else>
+        : if_c<Condition::value, Then, Else>
     { };
 
     // Integrals
@@ -285,6 +300,24 @@ namespace strict_mpl {
 
     using true_ = bool_<true>;
     using false_ = bool_<false>;
+
+
+    // Logicals
+    template <typename X, typename Y>
+    struct or_ {
+        using type = typename if_<X, X, Y>::type;
+    };
+
+    template <typename X, typename Y>
+    struct and_ {
+        using type = typename if_<X, Y, X>::type;
+    };
+
+    template <typename X>
+    struct not_ {
+        using type = typename if_<X, true_, false_>::type;
+    };
+
 
     // Sequences
     template <typename ...T>
@@ -373,18 +406,20 @@ using namespace lazy_mpl;
 // je pense que ce qui arrive ici est qu'on fold effectivement toute
 // la liste mais and_<false_, undefined> retourne `false_`. bref, ca
 // devrait chier sur des listes infinies.
-using And = foldr<
+
+// ruby -e "puts 500.times.collect { 'true_' }.join(', ')" | pbcopy
+
+using And = foldl<
     quote<and_>,
     true_,
-    // cons<false_, repeat<true_>>
     list<
-        true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_,
-        false_,
+        true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_, true_
+        , false_,
         struct undefined,
         struct undefined
     >
 >::type;
-using xxxxx = And::foob;
+// using xxxxx = And::foob;
 
 // ruby -e "puts 0.upto(800).to_a.join(', ')" | pbcopy
 
